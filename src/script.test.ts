@@ -1,0 +1,81 @@
+import { describe, expect, it } from "vitest";
+
+import { actionDuration, autoHandles, minimumJerk, moveDuration, parseScript, PRESS, type Script, typingDelays } from "./script.ts";
+
+describe("minimumJerk", () => {
+  it("starts and ends at rest, halfway at half time, and never runs backwards", () => {
+    expect(minimumJerk(0)).toBe(0);
+    expect(minimumJerk(1)).toBe(1);
+    expect(minimumJerk(0.5)).toBeCloseTo(0.5);
+    // Slow at both ends: the first and last tenths cover little ground.
+    expect(minimumJerk(0.1)).toBeLessThan(0.02);
+    expect(1 - minimumJerk(0.9)).toBeLessThan(0.02);
+    for (let t = 0; t < 1; t += 0.01) expect(minimumJerk(t + 0.01)).toBeGreaterThanOrEqual(minimumJerk(t));
+  });
+});
+
+describe("autoHandles", () => {
+  it("bows a move to the left of its direction, by the bend, a third along each end", () => {
+    // Moving right on screen (y down), left is up: negative y.
+    const { out, in: into } = autoHandles({ x: 0, y: 0 }, { x: 300, y: 0 }, 0.1);
+    expect(out).toEqual({ x: 100, y: -30 });
+    expect(into).toEqual({ x: -100, y: -30 });
+  });
+
+  it("is a straight line without a bend", () => {
+    const { out, in: into } = autoHandles({ x: 0, y: 0 }, { x: 0, y: 90 }, 0);
+    expect(out.x).toBeCloseTo(0);
+    expect(into.x).toBeCloseTo(0);
+  });
+});
+
+describe("moveDuration", () => {
+  it("takes a hand's pace: longer for farther, shorter for bigger targets, as given when given", () => {
+    expect(moveDuration({}, 800, 24)).toBeGreaterThan(moveDuration({}, 200, 24));
+    expect(moveDuration({}, 800, 200)).toBeLessThan(moveDuration({}, 800, 24));
+    expect(moveDuration({ duration: 2 }, 800, 24)).toBe(2);
+    expect(moveDuration({}, 0, 24)).toBe(0);
+  });
+});
+
+describe("typingDelays", () => {
+  it("is uneven but the same every time, slower at spaces", () => {
+    const delays = typingDelays("hello there");
+    expect(delays).toEqual(typingDelays("hello there"));
+    expect(new Set(delays.map((d) => d.toFixed(3))).size).toBeGreaterThan(5);
+    expect(delays[5]).toBeGreaterThanOrEqual(0.11);
+    for (const d of delays) expect(d).toBeGreaterThan(0.05);
+  });
+
+  it("counts into a step's action time", () => {
+    expect(actionDuration({ to: { x: 0, y: 0 }, action: "click", wait: 0 })).toBe(PRESS);
+    expect(actionDuration({ to: { x: 0, y: 0 }, action: "type", text: "hi", wait: 0 })).toBeGreaterThan(PRESS + 0.1);
+    expect(actionDuration({ to: { x: 0, y: 0 }, action: "move", wait: 1 })).toBe(0);
+    expect(actionDuration({ to: { x: 0, y: 0 }, action: "click", hover: 1, wait: 0 })).toBe(1 + PRESS);
+  });
+});
+
+describe("parseScript", () => {
+  const script: Script = {
+    version: 1,
+    start: { x: 10, y: 20 },
+    out: { x: 5, y: -5 },
+    steps: [
+      { to: { x: 100, y: 40, on: { selector: "button.pet", u: 0.5, v: 0.5 } }, in: { x: -20, y: 0 }, action: "click", hover: 0.8, wait: 0.4 },
+      { to: { x: 200, y: 40 }, action: "type", text: "Hi", duration: 0.6, wait: 0 },
+    ],
+  };
+
+  it("reads back what was saved", () => {
+    expect(parseScript(JSON.parse(JSON.stringify(script)))).toEqual(script);
+  });
+
+  it("refuses what isn't a script, and drops what it doesn't know", () => {
+    expect(parseScript(null)).toBeNull();
+    expect(parseScript({ version: 2, start: { x: 0, y: 0 }, steps: [] })).toBeNull();
+    expect(parseScript({ version: 1, start: { x: "a", y: 0 }, steps: [] })).toBeNull();
+    expect(parseScript({ version: 1, start: { x: 0, y: 0 }, steps: [{ to: {} }] })).toBeNull();
+    const loose = parseScript({ version: 1, start: { x: 0, y: 0, on: { selector: "", u: 0, v: 0 } }, steps: [{ to: { x: 1, y: 2 }, action: "dance", wait: -3, extra: true }] });
+    expect(loose).toEqual({ version: 1, start: { x: 0, y: 0 }, steps: [{ to: { x: 1, y: 2 }, action: "move", wait: 0 }] });
+  });
+});

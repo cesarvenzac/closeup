@@ -1,0 +1,10 @@
+{
+  // Typechecks the sources with their tests (npm run typecheck); tsconfig.build.json builds what's
+  // published from the same options.
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src"],
+  "exclude": []
+}

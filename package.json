@@ -1,0 +1,38 @@
+{
+  "name": "@cesarvenzac/closeup",
+  "version": "0.1.0",
+  "description": "Film any part of a web page in close-up, sharp at any size: photos and videos with a drawn cursor, backgrounds and sound.",
+  "keywords": ["screen-recording", "screencast", "screenshot", "video", "cursor", "demo", "region-capture", "browser"],
+  "homepage": "https://github.com/cesarvenzac/closeup#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cesarvenzac/closeup.git"
+  },
+  "bugs": "https://github.com/cesarvenzac/closeup/issues",
+  "author": "César Venzac (https://cesarvenzac.com)",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "sh check/run.sh",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
