@@ -1,6 +1,6 @@
 {
   "name": "@cesarvenzac/closeup",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Film any part of a web page in close-up, sharp at any size: photos and videos with a drawn cursor, backgrounds and sound.",
   "keywords": ["screen-recording", "screencast", "screenshot", "video", "cursor", "demo", "region-capture", "browser"],
   "homepage": "https://github.com/cesarvenzac/closeup#readme",
