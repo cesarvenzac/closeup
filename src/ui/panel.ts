@@ -100,7 +100,10 @@ export class Panel {
     return this.mounted;
   }
 
-  open() {
+  /** Opens on `pick`, an element of the page, ready to film; without one, asks what to film. */
+  open(pick?: Element) {
+    // Already filming, editing or showing a take: that comes first.
+    if (this.mounted && this.state !== "idle" && this.state !== "picking" && this.state !== "picked") return;
     if (!this.mounted) {
       document.documentElement.append(this.layer, this.ui);
       this.mounted = true;
@@ -114,7 +117,8 @@ export class Panel {
     }
     this.$(".bar").hidden = false;
     this.renderBar();
-    if (!this.picked) this.startPick();
+    if (pick?.isConnected) this.choose({ element: pick, rect: toRect(pick.getBoundingClientRect()), label: describe(pick) });
+    else if (!this.picked) this.startPick();
     else this.showPicked();
   }
 

@@ -2,7 +2,7 @@
 
 Film any part of a web page in close-up, sharp at any size: photos and videos of an element or
 a region, with a drawn macOS-like cursor that follows your mouse or plays a path you draw, on a
-background, with click sounds.
+background, with click sounds. Try it on [its page](https://cesarvenzac.com/lab/closeup).
 
 ```sh
 npm install @cesarvenzac/closeup
@@ -22,6 +22,14 @@ Or load it only when it's wanted, on a shortcut of your own:
 addEventListener("keydown", (event) => {
   if (event.code === "KeyC" && event.altKey && event.shiftKey) import("@cesarvenzac/closeup").then((closeup) => closeup.toggle());
 });
+```
+
+Or open it on an element, ready to film, from a button of your own:
+
+```ts
+import { open } from "@cesarvenzac/closeup";
+
+filmIt.addEventListener("click", () => open({ pick: document.querySelector("#demo") }));
 ```
 
 Press the shortcut, point at an element (↑ and ↓ widen and narrow the pick) or draw a region,

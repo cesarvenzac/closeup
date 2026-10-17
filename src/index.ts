@@ -26,7 +26,8 @@ let label = shortcutLabel(parseShortcut(DEFAULT_SHORTCUT));
 
 const instance = () => (panel ??= new Panel(label));
 
-export const open = () => instance().open();
+/** Opens Closeup. With `pick`, an element of the page, it opens on it, ready to film; without, it asks what to film. */
+export const open = ({ pick }: { pick?: Element | null } = {}) => instance().open(pick ?? undefined);
 export const close = () => panel?.close();
 export const toggle = () => instance().toggle();
 
