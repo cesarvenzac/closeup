@@ -28,8 +28,11 @@ export class DrawnCursor {
   private readonly hide = document.createElement("style");
   private shape: CursorShape | null = null;
   private shown = false;
+  private placed = false;
   private x = 0;
   private y = 0;
+  /** How much closer the camera is than the stage: the cursor is drawn that much bigger, as part of the take. */
+  private level = 1;
 
   constructor(
     private readonly host: Element,
@@ -75,6 +78,19 @@ export class DrawnCursor {
     this.hide.remove();
     this.element.remove();
     this.shown = false;
+    this.placed = false;
+  }
+
+  /** Drawn `level` times bigger (the camera's closeness), at once: it moves with the page, never behind it. */
+  zoom(level: number) {
+    if (level === this.level) return;
+    this.level = level;
+    this.element.style.transform = level === 1 ? "" : `scale(${level})`;
+  }
+
+  /** Draws it again where it is: the page moved under it, so its shape may have changed. */
+  refresh() {
+    if (this.placed && this.element.style.visibility !== "hidden") this.place(this.x, this.y);
   }
 
   /** Draws it at a point on screen, in the shape the real cursor would take there. */
@@ -92,6 +108,7 @@ export class DrawnCursor {
     this.element.style.translate = `${x - hot[0] * unit}px ${y - hot[1] * unit}px`;
     this.element.style.transformOrigin = `${hot[0] * unit}px ${hot[1] * unit}px`;
     this.element.style.visibility = "visible";
+    this.placed = true;
   }
 
   /** Presses a little going down, and back coming up, with the click's sound (and the ring, going down). */
@@ -103,7 +120,7 @@ export class DrawnCursor {
 
   /** The ring: from the tip, out to about the cursor's size, fading as it goes. Still under reduced motion. */
   private ripple() {
-    const size = this.options.size * 1.5;
+    const size = this.options.size * 1.5 * this.level;
     const ring = document.createElement("div");
     Object.assign(ring.style, {
       position: "fixed",

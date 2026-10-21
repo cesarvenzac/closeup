@@ -28,4 +28,6 @@ export const ICONS = {
   pointer_click: svg(`<path d="M14 4.1 12 6"/><path d="m5.1 8-2.9-.8"/><path d="m6 12-1.9 2"/><path d="M7.2 2.2 8 5.1"/><path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"/>`),
   type: svg(`<path d="M12 4v16"/><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/>`),
   arrow_left: svg(`<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>`),
+  pause: svg(`<rect x="14" y="3" width="5" height="18" rx="1"/><rect x="5" y="3" width="5" height="18" rx="1"/>`),
+  mouse: svg(`<rect x="5" y="2" width="14" height="20" rx="7"/><path d="M12 6v4"/>`),
 };

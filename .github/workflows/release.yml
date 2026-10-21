@@ -1,9 +1,10 @@
 # Publishes to npm when main carries a version that isn't there yet (a release is a version
-# bump), then tags it v<version>. Through npm's trusted publishing: npm trusts this workflow in
-# this repository, so there's no token, and every release says where and how it was built
-# (provenance). npm only trusts a workflow for a package that exists, so the first version is
-# published with a short-lived token, the NPM_TOKEN secret, and waits for it. It can be run by
-# hand too, say once that token is in place.
+# bump), then tags it v<version> and makes it a GitHub release, its notes the version's section of
+# CHANGELOG.md. Through npm's trusted publishing: npm trusts this workflow in this repository, so
+# there's no token, and every release says where and how it was built (provenance). npm only
+# trusts a workflow for a package that exists, so the first version is published with a
+# short-lived token, the NPM_TOKEN secret, and waits for it. It can be run by hand too, say once
+# that token is in place.
 name: Release
 
 on:
@@ -67,3 +68,13 @@ jobs:
         run: |
           git tag "v$VERSION"
           git push origin "v$VERSION"
+      - if: steps.release.outputs.publish == 'true'
+        name: Say what it brings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          # The version's section of the changelog, its heading left out.
+          awk -v version="$VERSION" '/^## / { if (found) exit; found = ($2 == version); next } found' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          [ -s "$RUNNER_TEMP/notes.md" ] || echo "What changed is in the [changelog](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md)." > "$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag

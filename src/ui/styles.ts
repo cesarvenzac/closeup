@@ -18,6 +18,7 @@ export const STYLES = /* css */ `
   --on: rgb(255 255 255 / 0.16);
   --accent: #0a84ff;
   --record: #ff453a;
+  --trim: #ffd60a;
   position: fixed;
   z-index: 2147483647;
   color: var(--ink);
@@ -90,7 +91,12 @@ kbd { font: inherit; padding: 1px 5px; border-radius: 4px; background: rgb(255 2
   border: 1.5px solid var(--accent, #0a84ff); background: rgb(10 132 255 / 0.08);
   transition: left 70ms ease-out, top 70ms ease-out, width 70ms ease-out, height 70ms ease-out;
 }
-.outline[data-picked] { box-shadow: 0 0 0 100vmax rgb(12 12 14 / 0.28); background: none; }
+.outline[data-picked] { background: none; }
+/* What a take of the pick films, its shape and room included: a hairline, and everything outside dimmed */
+.frame {
+  position: fixed; z-index: 2147483644; pointer-events: none; border-radius: 2px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.55), 0 0 0 100vmax rgb(12 12 14 / 0.28);
+}
 .tag {
   position: absolute; left: -1.5px; bottom: calc(100% + 6px); padding: 3px 6px; border-radius: 5px;
   background: #0a84ff; color: white; font: 500 11px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -105,6 +111,9 @@ kbd { font: inherit; padding: 1px 5px; border-radius: 4px; background: rgb(255 2
   transform-origin: bottom center;
 }
 @starting-style { .options { translate: -50% 6px; scale: 0.98; } }
+.group { display: grid; gap: 2px; }
+.group + .group { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 2px; }
+.group h3 { all: unset; display: block; color: var(--faint); font-size: 11px; font-weight: 500; padding: 8px 2px 2px; }
 .row { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 8px; min-height: 36px; }
 .row > .name { color: var(--muted); }
 .row.sub > .name { color: var(--faint); padding-left: 10px; }
@@ -114,7 +123,8 @@ kbd { font: inherit; padding: 1px 5px; border-radius: 4px; background: rgb(255 2
 .switch[aria-checked="true"] { background: var(--on); }
 input[type="range"] { width: 100%; accent-color: var(--ink); }
 .slider { display: grid; grid-template-columns: 1fr 42px; align-items: center; gap: 8px; }
-.slider output { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.slider output { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.slider.wide { grid-template-columns: 1fr 64px; }
 .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
 .swatch { width: 26px; height: 26px; min-width: 0; padding: 0; border-radius: 999px; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18); }
 .swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px rgb(30 30 32), 0 0 0 4px var(--ink); background-clip: padding-box; }
@@ -130,6 +140,10 @@ input[type="color"] { width: 30px; height: 26px; padding: 0; border: 0; border-r
 @keyframes pulse { 50% { opacity: 0.45; } }
 .time { font-variant-numeric: tabular-nums; min-width: 34px; }
 .stop { border-radius: 999px; background: rgb(255 255 255 / 0.12); padding: 0 10px; }
+.hud .pause { border-radius: 999px; padding: 0; }
+/* Counting down or rehearsing isn't filming: no red dot. Paused, it stops breathing. */
+.hud[data-mode="counting"] .dot, .hud[data-mode="rehearsing"] .dot, .hud[data-mode="counting"] .stop svg { display: none; }
+.hud[data-paused] .dot { animation: none; background: var(--faint); }
 
 /* The result */
 .backdrop { pointer-events: auto; position: fixed; inset: 0; z-index: 2147483646; background: rgb(12 12 14 / 0.55); backdrop-filter: blur(6px); transition: opacity 180ms ease-out; }
@@ -146,6 +160,28 @@ input[type="color"] { width: 30px; height: 26px; padding: 0; border: 0; border-r
 /* A page's own action counts its progress up in the same width. */
 .footer [data-action="take-action"] span { font-variant-numeric: tabular-nums; }
 .toast { left: 50%; top: 22px; translate: -50% 0; padding: 9px 13px; border-radius: 10px; max-width: calc(100vw - 32px); }
+.sheet:has(.trim) .media, .sheet:has(.trim) .media video { max-height: calc(100vh - 250px); }
+.media video { cursor: pointer; }
+.formats, .speeds { display: flex; gap: 2px; }
+.formats button, .speeds button { height: 26px; padding: 0 8px; }
+.formats { margin: 0 4px; }
+
+/* Trimming a video: its frames, the part kept between two handles, a playhead */
+.trim { display: grid; gap: 8px; padding: 0 2px; }
+.track { position: relative; height: 44px; border-radius: 8px; background: rgb(0 0 0 / 0.35); touch-action: none; }
+.strip { position: absolute; inset: 0; display: block; width: 100%; height: 100%; border-radius: 8px; }
+.shade { position: absolute; top: 0; bottom: 0; background: rgb(12 12 14 / 0.66); pointer-events: none; }
+.shade.before { border-radius: 8px 0 0 8px; }
+.shade.after { border-radius: 0 8px 8px 0; }
+.window { position: absolute; top: -2px; bottom: -2px; border-block: 2px solid var(--trim); pointer-events: none; }
+.grip { position: absolute; top: -2px; bottom: -2px; width: 12px; background: var(--trim); cursor: ew-resize; }
+.grip.start { border-radius: 7px 0 0 7px; }
+.grip.end { margin-left: -12px; border-radius: 0 7px 7px 0; }
+.grip::after { content: ""; position: absolute; left: 5px; top: 34%; bottom: 34%; width: 2px; border-radius: 1px; background: rgb(0 0 0 / 0.45); }
+.grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.head { position: absolute; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--ink); box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35); pointer-events: none; }
+.under { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.range { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* The script editor: Figma's pen, over the staged page */
 .paths { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 2147483645; pointer-events: auto; cursor: crosshair; overflow: visible; }
@@ -157,6 +193,7 @@ input[type="color"] { width: 30px; height: 26px; padding: 0; border: 0; border-r
 .paths .node .dot { fill: #0a84ff; stroke: none; }
 .paths .node.selected .dot { fill: #fff; }
 .paths .handle-line { stroke: #0a84ff; stroke-width: 1; }
+.paths .scrolled { stroke: #0a84ff; stroke-width: 1.5; stroke-dasharray: 3 4; pointer-events: none; }
 .paths .handle { fill: #fff; stroke: #0a84ff; stroke-width: 1.5; cursor: grab; }
 .paths .aim { fill: rgb(10 132 255 / 0.06); stroke: rgb(10 132 255 / 0.7); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
 .labels { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }

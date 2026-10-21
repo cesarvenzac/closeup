@@ -1,9 +1,9 @@
 {
   "name": "@cesarvenzac/closeup",
-  "version": "0.2.0",
-  "description": "Film any part of a web page in close-up, sharp at any size: photos and videos with a drawn cursor, backgrounds and sound.",
-  "keywords": ["screen-recording", "screencast", "screenshot", "video", "cursor", "demo", "region-capture", "browser"],
-  "homepage": "https://cesarvenzac.com/lab/closeup",
+  "version": "1.0.0",
+  "description": "Film any part of a web page in close-up, sharp at any size: photos, videos and GIFs, with a drawn cursor, a camera that closes in on clicks, and scripted takes.",
+  "keywords": ["screen-recording", "screencast", "screenshot", "screen-capture", "video", "gif", "cursor", "zoom", "demo", "product-demo", "region-capture", "getdisplaymedia", "browser"],
+  "homepage": "https://cesarvenzac.com/closeup",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cesarvenzac/closeup.git"

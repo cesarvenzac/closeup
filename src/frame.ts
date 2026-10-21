@@ -98,3 +98,44 @@ export function insetRect(outer: Size, padding: number): Rect {
   const height = outer.height * scale;
   return { x: (outer.width - width) / 2, y: (outer.height - height) / 2, width, height };
 }
+
+/** A transform for <body>: how much it's enlarged, and where it's moved to (as `Stage` has them). */
+export type View = Pick<Stage, "scale" | "tx" | "ty">;
+
+/** The part of the page the frame shows under `view`, the page scrolled by `scroll`: the frame's screen box, back on the page. */
+export function shownBy(view: View, scroll: { x: number; y: number }, screen: Rect): Rect {
+  const corner = toPage(view, scroll, screen);
+  return { x: corner.x, y: corner.y, width: screen.width / view.scale, height: screen.height / view.scale };
+}
+
+/**
+ * How far the camera may pan down the page from the stage (negative, up): as far as the page
+ * goes either way, given its height. A page shorter than the frame doesn't pan.
+ */
+export function panRange(stage: Stage, scroll: { x: number; y: number }, pageHeight: number): [number, number] {
+  const shown = shownBy(stage, scroll, stage.screen);
+  const up = Math.min(0, -shown.y);
+  const down = Math.max(0, pageHeight - (shown.y + shown.height));
+  return [up, down];
+}
+
+/**
+ * The stage as the camera sees it: moved `pan` page pixels down the page (clamped to `range`),
+ * then enlarged `zoom` times toward `focus`, a point of the page, which stays where it is on
+ * screen as far as the frame allows: the zoomed view never shows past what the panned stage
+ * showed, so it closes in on its own part of the take rather than wandering off the page.
+ */
+export function cameraView(stage: Stage, scroll: { x: number; y: number }, zoom: number, focus: { x: number; y: number }, pan: number, range: [number, number] = [-Infinity, Infinity]): View {
+  const moved = Math.max(range[0], Math.min(range[1], pan));
+  const panned: View = { scale: stage.scale, tx: stage.tx, ty: stage.ty - moved * stage.scale };
+  if (zoom <= 1) return panned;
+  const scale = stage.scale * zoom;
+  const anchor = toScreen(panned, scroll, focus);
+  const outer = shownBy(panned, scroll, stage.screen);
+  const width = stage.screen.width / scale;
+  const height = stage.screen.height / scale;
+  // Where the zoomed view's corner would be on the page, kept inside what the stage showed.
+  const x = Math.max(outer.x, Math.min(outer.x + outer.width - width, focus.x - (anchor.x - stage.screen.x) / scale));
+  const y = Math.max(outer.y, Math.min(outer.y + outer.height - height, focus.y - (anchor.y - stage.screen.y) / scale));
+  return { scale, tx: stage.screen.x + scroll.x - x * scale, ty: stage.screen.y + scroll.y - y * scale };
+}

@@ -6,21 +6,25 @@
  */
 
 import { actionsFor, type TakeAction } from "../actions.ts";
+import { type Edit, isEdited, lengthOf, whole } from "../edit.ts";
+import { editedVideo, gifOf } from "../export.ts";
+import type { Camera } from "../camera.ts";
 import { supportsCapture } from "../capture.ts";
-import { fillFor, pixelSize, type Rect, SHAPES, type Shape, type Stage, stageFor, toScreen } from "../frame.ts";
+import { fillFor, pixelSize, type Rect, SHAPES, type Shape, type Stage, stageFor } from "../frame.ts";
 import { play } from "../player.ts";
 import { Mixer } from "../sounds.ts";
-import { enterStage } from "../stage.ts";
-import { GRADIENTS, loadSettings, saveSettings, type Settings } from "../settings.ts";
+import { enterStage, holdStill } from "../stage.ts";
+import { COUNTDOWNS, DEFAULTS, GRADIENTS, loadSettings, saveSettings, type Settings, TIMERS, ZOOMS } from "../settings.ts";
 import type { Script } from "../script.ts";
 import { describe } from "../selector.ts";
 import { loadScript, saveScript } from "../store.ts";
-import { createActor, frameBox, frameOf, type Layers, pageHit, type Picked, type Result, type Running, startVideo, takePhoto, toRect } from "../take.ts";
+import { type Before, cameraFor, createActor, frameBox, frameOf, type Layers, pageHeight, pageHit, type Picked, type Result, type Running, startVideo, takePhoto, toRect } from "../take.ts";
 import { Editor } from "./editor.ts";
+import { TrimBar } from "./trim.ts";
 import { ICONS, svg } from "./icons.ts";
 import { STYLES } from "./styles.ts";
 
-type State = "idle" | "picking" | "picked" | "busy" | "recording" | "preview" | "editing" | "rehearsing";
+type State = "idle" | "picking" | "picked" | "busy" | "counting" | "recording" | "preview" | "editing" | "rehearsing";
 type Pick = Picked & { label: string; /** A region's rectangle in the document, so it follows scrolling. */ page?: Rect };
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -33,6 +37,10 @@ const isSmall = (element: Element) => {
 };
 
 const stamp = () => new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
+
+/** Puts a fixed box over a rectangle of the viewport. */
+const place = (element: HTMLElement, rect: Rect) =>
+  Object.assign(element.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
 
 export class Panel {
   private readonly ui = document.createElement("div");
@@ -56,11 +64,20 @@ export class Panel {
   private follow = 0;
   private mounted = false;
   private optionsOpen = false;
-  /** While a script is edited: the editor, the stage it's on, and what puts the page back. */
-  private editing: { editor: Editor; stage: Stage; box: HTMLElement; leave: () => Promise<void> } | null = null;
+  /** While a script is edited: the editor, the stage it's on, its camera, and what puts the page back. */
+  private editing: { editor: Editor; stage: Stage; camera: Camera; box: HTMLElement; leave: () => Promise<void>; still: () => void } | null = null;
   private rehearsal: AbortController | null = null;
+  /** While a countdown runs: what calls it off. */
+  private cancelCount: (() => void) | null = null;
+  /** The take on show: its trim bar, what it's kept as, and what's been made of it so far. */
+  private trim: TrimBar | null = null;
+  private format: "video" | "gif" = "video";
+  private made = new Map<string, Promise<Blob>>();
+  private making: AbortController | null = null;
 
   constructor(private readonly shortcutLabel: string) {
+    // An image is held in memory alone: after a reload there's none to draw, so none is chosen.
+    if (this.settings.background === "image") this.settings.background = "none";
     this.shadow = this.ui.attachShadow({ mode: "open" });
     this.$ = <T extends HTMLElement>(selector: string) => this.shadow.querySelector(selector) as T;
     const fixed = "position:fixed;inset:0;pointer-events:none;";
@@ -70,6 +87,7 @@ export class Panel {
     this.layer.setAttribute("data-closeup", "");
     this.shadow.innerHTML = `
       <style>${STYLES}</style>
+      <div class="frame" hidden></div>
       <div class="outline" hidden><div class="tag"></div></div>
       <div class="catcher" hidden></div>
       <div class="surface info" hidden></div>
@@ -87,7 +105,11 @@ export class Panel {
         <button data-action="options" aria-expanded="false"><span>Options</span><span class="chevron">${ICONS.chevron_down}</span></button>
         <button class="go" data-action="go" disabled>Record</button>
       </div>
-      <div class="surface hud" hidden><span class="dot" aria-hidden="true"></span><span class="time">0:00</span><button class="stop" data-action="stop">${ICONS.square}Stop</button></div>
+      <div class="surface hud" hidden role="group" aria-label="Recording">
+        <span class="dot" aria-hidden="true"></span><span class="time">0:00</span>
+        <button class="pause" data-action="pause" aria-label="Pause" title="Pause">${ICONS.pause}</button>
+        <button class="stop" data-action="stop">${ICONS.square}<span>Stop</span></button>
+      </div>
       <div class="backdrop" hidden data-action="retake"></div>
       <div class="surface sheet" hidden role="dialog" aria-label="Your take"></div>
       <div class="surface toast" hidden role="status"></div>`;
@@ -140,7 +162,7 @@ export class Panel {
     this.layer.remove();
     this.mounted = false;
     this.state = "idle";
-    for (const selector of [".bar", ".info", ".options", ".outline", ".hud", ".toast"]) this.$(selector).hidden = true;
+    for (const selector of [".bar", ".info", ".options", ".outline", ".frame", ".hud", ".toast"]) this.$(selector).hidden = true;
   }
 
   toggle() {
@@ -159,6 +181,7 @@ export class Panel {
     const outline = this.$(".outline");
     outline.hidden = true;
     outline.removeAttribute("data-picked");
+    this.$(".frame").hidden = true;
     if (this.settings.pick === "element") {
       for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click"]) addEventListener(type, this.swallow, true);
       addEventListener("pointermove", this.onPickMove, true);
@@ -262,15 +285,24 @@ export class Panel {
     this.follow = requestAnimationFrame(() => {
       if (this.state !== "picked") return;
       const rect = this.pickedRect();
-      if (rect) this.outline(rect, this.picked!.label);
+      if (!rect) return;
+      this.outline(rect, this.picked!.label);
+      this.showFrame(rect);
     });
   };
 
   private outline(rect: Rect, label: string) {
     const outline = this.$(".outline");
-    Object.assign(outline.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+    place(outline, rect);
     this.$(".tag").textContent = `${label} · ${Math.round(rect.width)}×${Math.round(rect.height)}`;
     outline.hidden = false;
+  }
+
+  /** What a take of the pick will film, the shape and the room round it included: everything outside it dimmed. */
+  private showFrame(rect: Rect) {
+    const frame = this.$(".frame");
+    place(frame, frameOf(rect, this.picked?.element ?? null, this.settings));
+    frame.hidden = false;
   }
 
   /* ------------------------------------------------------------------ rendering */
@@ -325,6 +357,8 @@ export class Panel {
     panel.hidden = !this.optionsOpen;
     if (!this.optionsOpen) return;
     const s = this.settings;
+    const video = s.mode === "video";
+    const scripted = video && s.moves === "script";
     const choice = (setting: keyof Settings, value: string, label: string) =>
       `<button data-action="set" data-setting="${setting}" data-value="${value}" aria-pressed="${String(s[setting]) === value}">${label}</button>`;
     const toggle = (setting: keyof Settings, label: string) =>
@@ -334,6 +368,8 @@ export class Panel {
     const percent = (v: number) => `${Math.round(v * 100)}%`;
     const pixels = (v: number) => `${Math.round(v)}`;
     const row = (name: string, body: string, sub = false) => `<div class="row${sub ? " sub" : ""}"><span class="name">${name}</span>${body}</div>`;
+    const group = (name: string, ...rows: string[]) => `<section class="group" aria-label="${name}"><h3>${name}</h3>${rows.join("")}</section>`;
+    const seconds = (value: number) => (value ? `${value} s` : "Off");
     const shapes = (Object.keys(SHAPES) as Shape[]).map((shape) => choice("shape", shape, shape === "free" ? "Free" : shape)).join("");
     const backgrounds = [
       ["none", "None"],
@@ -348,22 +384,37 @@ export class Panel {
         `<button class="swatch" data-action="set" data-setting="gradient" data-value="${k}" aria-pressed="${s.gradient === k}" aria-label="${g.name}" title="${g.name}" style="background:linear-gradient(${g.angle}deg, ${g.from}, ${g.to})"></button>`,
     ).join("");
     panel.innerHTML = [
-      row("Shape", `<div class="choices">${shapes}</div>`),
-      // A drawn region is filmed as drawn: room is for elements.
-      s.pick === "element" ? row("Room", slider("padding", "Room round the pick", 0, 0.8, 0.01, percent)) : "",
-      row("Background", `<div class="choices">${backgrounds}</div>`),
-      s.background === "color" ? row("Colour", `<input type="color" value="${s.color}" data-setting="color" aria-label="Background colour">`, true) : "",
-      s.background === "gradient" ? row("Gradient", `<div class="swatches">${swatches}</div>`, true) : "",
-      s.background === "image" ? row("Image", `<div class="choices"><button data-action="choose-image">${ICONS.image}${this.imageName ? escapeHtml(this.imageName.slice(0, 24)) : "Choose…"}</button></div>`, true) : "",
-      s.background !== "none" ? row("Inset", slider("inset", "Room round the page", 0, 0.2, 0.005, percent), true) : "",
-      s.background !== "none" ? row("Corners", slider("radius", "Corner radius", 0, 60, 1, pixels), true) : "",
-      s.background !== "none" ? row("Shadow", toggle("shadow", "Shadow"), true) : "",
-      row("Cursor", `<div class="choices">${toggle("cursor", "Drawn cursor")}${toggle("ring", "Click ring")}</div>`),
-      s.mode === "video" ? row("Moves", `<div class="choices">${choice("moves", "yours", "Yours")}${choice("moves", "script", "Script")}</div>`, true) : "",
-      s.mode === "video" && s.moves === "script" && !loadScript() ? row("", `<span class="note">No script on this page yet</span>`, true) : "",
-      s.cursor || (s.mode === "video" && s.moves === "script") ? row("Size", slider("cursorSize", "Cursor size", 16, 96, 1, pixels), true) : "",
-      s.mode === "video" ? row("Sound", `<div class="choices">${toggle("clicks", "Clicks")}${toggle("tabAudio", "Tab audio")}</div>`) : "",
-      s.mode === "video" ? row("Quality", `<div class="choices">${choice("quality", "standard", "Standard")}${choice("quality", "high", "High")}</div>`) : "",
+      group(
+        "Frame",
+        row("Shape", `<div class="choices">${shapes}</div>`),
+        // A drawn region is filmed as drawn: room is for elements.
+        s.pick === "element" ? row("Room", slider("padding", "Room round the pick", 0, 0.8, 0.01, percent)) : "",
+        video ? row("Zoom in", `<div class="choices" title="Closes in on each click and on typing">${ZOOMS.map((level) => choice("zoom", String(level), level === 1 ? "Off" : `${level}×`)).join("")}</div>`) : "",
+      ),
+      group(
+        "Background",
+        row("Kind", `<div class="choices">${backgrounds}</div>`),
+        s.background === "color" ? row("Colour", `<input type="color" value="${s.color}" data-setting="color" aria-label="Background colour">`, true) : "",
+        s.background === "gradient" ? row("Gradient", `<div class="swatches">${swatches}</div>`, true) : "",
+        s.background === "image" ? row("Image", `<div class="choices"><button data-action="choose-image">${ICONS.image}${this.imageName ? escapeHtml(this.imageName.slice(0, 24)) : "Choose…"}</button></div>`, true) : "",
+        s.background !== "none" ? row("Inset", slider("inset", "Room round the page", 0, 0.2, 0.005, percent), true) : "",
+        s.background !== "none" ? row("Corners", slider("radius", "Corner radius", 0, 60, 1, pixels), true) : "",
+        s.background !== "none" ? row("Shadow", toggle("shadow", "Shadow"), true) : "",
+      ),
+      group(
+        "Cursor",
+        video ? row("Moves", `<div class="choices">${choice("moves", "yours", "Yours")}${choice("moves", "script", "Script")}</div>`) : "",
+        scripted && !loadScript() ? row("", `<span class="note">No script on this page yet</span>`, true) : "",
+        row("Show", `<div class="choices">${scripted ? "" : toggle("cursor", "Drawn cursor")}${toggle("ring", "Click ring")}</div>`),
+        s.cursor || scripted ? row("Size", slider("cursorSize", "Cursor size", 16, 96, 1, pixels)) : "",
+      ),
+      group(
+        video ? "Recording" : "Photo",
+        video && !scripted ? row("Countdown", `<div class="choices">${COUNTDOWNS.map((n) => choice("countdown", String(n), seconds(n))).join("")}</div>`) : "",
+        !video ? row("Timer", `<div class="choices">${TIMERS.map((n) => choice("timer", String(n), seconds(n))).join("")}</div>`) : "",
+        video ? row("Sound", `<div class="choices">${toggle("clicks", "Clicks")}${toggle("tabAudio", "Tab audio")}</div>`) : "",
+        video ? row("Quality", `<div class="choices">${choice("quality", "standard", "Standard")}${choice("quality", "high", "High")}</div>`) : "",
+      ),
       `<p class="hint"><kbd>${this.shortcutLabel}</kbd> opens and closes · <kbd>Esc</kbd> stops a take</p>`,
     ].join("");
   }
@@ -396,10 +447,11 @@ export class Panel {
         return this.renderInfo();
       case "set": {
         const key = setting as keyof Settings;
-        (this.settings as Record<string, unknown>)[key] = key === "gradient" ? Number(value) : value;
+        (this.settings as Record<string, unknown>)[key] = typeof DEFAULTS[key] === "number" ? Number(value) : value;
         this.save();
         this.renderOptions();
         this.renderBar();
+        this.track();
         return this.renderInfo();
       }
       case "toggle": {
@@ -415,11 +467,17 @@ export class Panel {
       case "go":
         return this.go();
       case "stop":
-        return this.stop();
+        return this.state === "counting" ? this.cancelCount?.() : this.stop();
+      case "pause":
+        return this.pause();
       case "retake":
         return this.closePreview();
       case "download":
         return this.download();
+      case "format":
+        this.format = value === "gif" ? "gif" : "video";
+        this.shadow.querySelectorAll<HTMLButtonElement>("[data-action='format']").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.value === this.format)));
+        return this.renderMeta();
       case "copy":
         return this.copy();
       case "take-action":
@@ -436,6 +494,7 @@ export class Panel {
     this.save();
     const output = this.shadow.querySelector(`output[data-for="${key}"]`);
     if (output && typeof value === "number") output.textContent = key === "radius" || key === "cursorSize" ? `${Math.round(value)}` : `${Math.round(value * 100)}%`;
+    if (key === "padding") this.track();
   };
 
   private onKey = (event: KeyboardEvent) => {
@@ -452,6 +511,7 @@ export class Panel {
       event.preventDefault();
       event.stopImmediatePropagation();
       if (this.state === "preview") this.closePreview();
+      else if (this.state === "counting") this.cancelCount?.();
       else if (this.state === "recording") void this.stop();
       else if (this.optionsOpen) {
         this.optionsOpen = false;
@@ -485,7 +545,7 @@ export class Panel {
   }
 
   private hideControls() {
-    for (const selector of [".bar", ".info", ".options", ".outline"]) this.$(selector).hidden = true;
+    for (const selector of [".bar", ".info", ".options", ".outline", ".frame"]) this.$(selector).hidden = true;
   }
 
   private showControls() {
@@ -497,42 +557,109 @@ export class Panel {
   }
 
   private async go() {
-    if (!this.picked || this.state === "busy" || this.state === "recording") return;
+    if (!this.picked || this.state === "busy" || this.state === "recording" || this.state === "counting") return;
     const scripted = this.settings.mode === "video" && this.settings.moves === "script";
     const script = scripted ? loadScript() : null;
     if (scripted && !script) return this.toast("No script on this page yet.");
     this.state = "busy";
     this.optionsOpen = false;
     this.hideControls();
+    let cancelled = false;
+    // A countdown for a take by hand, a timer for a photo: in the room above the frame, never filmed.
+    const count = (seconds: number, words: string): Before | undefined =>
+      seconds
+        ? (screen) =>
+            this.countdown(seconds, words, screen).catch((error) => {
+              cancelled = true;
+              throw error;
+            })
+        : undefined;
     try {
       if (this.settings.mode === "photo") {
-        this.showResult(await takePhoto(this.picked, this.settings, this.layers, this.image));
+        this.showResult(await takePhoto(this.picked, this.settings, this.layers, this.image, count(this.settings.timer, "Photo in")));
         return;
       }
-      const running = await startVideo(this.picked, this.settings, this.layers, this.image, script);
+      const running = await startVideo(this.picked, this.settings, this.layers, this.image, script, script ? undefined : count(this.settings.countdown, "Recording in"));
       this.running = running;
       // A script ends the take itself, unless it was stopped first.
       void running.finished?.then(() => {
         if (this.running === running) void this.stop();
       });
       this.state = "recording";
-      const hud = this.$(".hud");
-      hud.style.top = `${Math.max(10, this.running.screen.y - 50)}px`;
-      hud.hidden = false;
-      const time = this.$(".time");
-      const started = this.running.started;
+      this.showHud(running.screen, "recording");
+      this.$<HTMLButtonElement>(".pause").hidden = !!script;
       const show = () => {
-        const seconds = Math.floor((performance.now() - started) / 1000);
-        time.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+        const seconds = Math.floor(running.elapsed());
+        this.$(".time").textContent = running.paused ? "Paused" : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
       };
       show();
       this.timer = window.setInterval(show, 250);
     } catch (error) {
       this.state = "picked";
+      this.$(".hud").hidden = true;
       const name = (error as Error).name;
-      this.toast(name === "NotAllowedError" || name === "AbortError" ? "Sharing was cancelled." : `Couldn't film: ${(error as Error).message}`);
+      if (cancelled) this.toast("Cancelled.");
+      else this.toast(name === "NotAllowedError" || name === "AbortError" ? "Sharing was cancelled." : `Couldn't film: ${(error as Error).message}`);
       this.showControls();
     }
+  }
+
+  /** The recording's controls, in the room above the frame (outside what's filmed). */
+  private showHud(screen: Rect, mode: "counting" | "recording" | "rehearsing") {
+    const hud = this.$(".hud");
+    hud.style.top = `${Math.max(10, screen.y - 50)}px`;
+    hud.dataset.mode = mode;
+    hud.removeAttribute("data-paused");
+    this.$(".stop span").textContent = mode === "counting" ? "Cancel" : "Stop";
+    const pause = this.$<HTMLButtonElement>(".pause");
+    pause.hidden = mode !== "recording";
+    pause.innerHTML = ICONS.pause;
+    pause.setAttribute("aria-label", "Pause");
+    pause.title = "Pause";
+    hud.hidden = false;
+  }
+
+  /** Counts `seconds` down above the frame, then resolves; Esc or Cancel rejects instead. */
+  private countdown(seconds: number, words: string, screen: Rect) {
+    return new Promise<void>((resolve, reject) => {
+      this.state = "counting";
+      this.showHud(screen, "counting");
+      const time = this.$(".time");
+      let left = seconds;
+      const show = () => (time.textContent = `${words} ${left}`);
+      show();
+      const end = () => {
+        clearInterval(timer);
+        this.cancelCount = null;
+        this.$(".hud").hidden = true;
+        this.state = "busy";
+      };
+      const timer = window.setInterval(() => {
+        left -= 1;
+        if (left > 0) return show();
+        end();
+        resolve();
+      }, 1000);
+      this.cancelCount = () => {
+        end();
+        reject(new DOMException("The take was called off", "AbortError"));
+      };
+    });
+  }
+
+  /** Holds a take by hand, or goes on with it. */
+  private pause() {
+    const running = this.running;
+    if (!running || this.state !== "recording") return;
+    if (running.paused) running.resume();
+    else running.pause();
+    const paused = running.paused;
+    const button = this.$(".pause");
+    button.innerHTML = paused ? ICONS.play : ICONS.pause;
+    button.setAttribute("aria-label", paused ? "Resume" : "Pause");
+    button.title = paused ? "Resume" : "Pause";
+    this.$(".hud").toggleAttribute("data-paused", paused);
+    this.$(".time").textContent = paused ? "Paused" : this.$(".time").textContent;
   }
 
   /* ------------------------------------------------------------------ scripts */
@@ -540,25 +667,31 @@ export class Panel {
   /** Opens the script editor on the stage, at the size the take is filmed. */
   private async editScript() {
     if (!this.picked || this.state !== "picked") return;
+    // Measured as the stage will lay the page out, as a take does.
+    const still = holdStill();
     const rect = this.pickedRect();
-    if (!rect) return;
+    if (!rect) return still();
     this.state = "editing";
     this.optionsOpen = false;
     this.hideControls();
     const viewport = { width: innerWidth, height: innerHeight };
-    const stage = stageFor(frameOf(rect, this.picked.element, this.settings), viewport, fillFor(viewport), { x: scrollX, y: scrollY });
+    const scroll = { x: scrollX, y: scrollY };
+    const stage = stageFor(frameOf(rect, this.picked.element, this.settings), viewport, fillFor(viewport), scroll);
+    const height = pageHeight();
     const leave = await enterStage(stage);
+    const camera = cameraFor(stage, scroll, height);
     const box = frameBox(stage.screen, this.layer);
     const editor = new Editor({
       root: this.shadow,
-      stage,
+      camera,
+      zoom: this.settings.zoom,
       hit: pageHit(this.layers),
       script: loadScript(),
       onChange: (script) => saveScript(script),
       onPreview: (script) => void this.rehearse(script),
       onDone: () => void this.doneEditing(),
     });
-    this.editing = { editor, stage, box, leave };
+    this.editing = { editor, stage, camera, box, leave, still };
   }
 
   /** Leaves the editor: the page back as it was, and the script set to play if there is one. */
@@ -568,8 +701,10 @@ export class Panel {
     this.editing = null;
     this.state = "busy";
     editing.editor.destroy();
+    editing.camera.stop();
     editing.box.remove();
     await editing.leave();
+    editing.still();
     if (loadScript()?.steps.length) {
       this.settings.moves = "script";
       this.save();
@@ -589,17 +724,18 @@ export class Panel {
     const actor = createActor(this.layers, { size: this.settings.cursorSize, onPress: mixer ? (down) => mixer.click(down) : undefined, ring: this.settings.ring });
     const rehearsal = new AbortController();
     this.rehearsal = rehearsal;
-    const hud = this.$(".hud");
-    hud.style.top = `${Math.max(10, editing.stage.screen.y - 50)}px`;
-    this.$(".time").textContent = "Preview";
+    // Played as it will be filmed: from the top of the stage, the camera closing in as set.
+    const camera = editing.camera;
+    camera.zoomOut();
+    camera.panBy(-camera.panned, { now: true });
     // Not filming: no red dot.
-    this.$(".dot").hidden = true;
-    hud.hidden = false;
+    this.showHud(editing.stage.screen, "rehearsing");
+    this.$(".time").textContent = "Preview";
     try {
       await play(script, {
         ...actor,
-        toScreen: (p) => toScreen(editing.stage, { x: scrollX, y: scrollY }, p),
-        scale: editing.stage.scale,
+        camera,
+        zoom: this.settings.zoom,
         onKey: mixer ? () => mixer.key() : undefined,
         signal: rehearsal.signal,
         lead: 0.3,
@@ -608,17 +744,17 @@ export class Panel {
     } finally {
       actor.dispose();
       mixer?.close();
-      hud.hidden = true;
-      this.$(".dot").hidden = false;
+      this.$(".hud").hidden = true;
       this.rehearsal = null;
       this.state = "editing";
+      camera.zoomOut();
       editing.editor.hidden = false;
     }
   }
 
   private async stop() {
     if (this.state === "rehearsing") return this.rehearsal?.abort();
-    if (!this.running) return;
+    if (!this.running || this.state !== "recording") return;
     clearInterval(this.timer);
     this.$(".hud").hidden = true;
     const running = this.running;
@@ -630,14 +766,12 @@ export class Panel {
   private showResult(result: Result) {
     this.result = result;
     this.state = "preview";
+    this.format = "video";
+    this.made.clear();
     URL.revokeObjectURL(this.resultUrl);
     this.resultUrl = URL.createObjectURL(result.blob);
-    const media =
-      result.kind === "photo"
-        ? `<img src="${this.resultUrl}" alt="The photo">`
-        : `<video src="${this.resultUrl}" autoplay loop muted playsinline controls></video>`;
-    const ext = result.type.includes("mp4") ? "MP4" : result.type.includes("png") ? "PNG" : "WebM";
-    const parts = [`${result.width} × ${result.height}`, result.seconds ? `${result.seconds.toFixed(1)} s` : "", `${(result.blob.size / 1e6).toFixed(1)} MB`, ext].filter(Boolean);
+    const video = result.kind === "video";
+    const media = video ? `<video src="${this.resultUrl}" autoplay muted playsinline aria-label="Your take: select to pause or play"></video>` : `<img src="${this.resultUrl}" alt="The photo">`;
     this.takeActions = actionsFor(result);
     const actions = this.takeActions
       .map((action, index) => `<button data-action="take-action" data-index="${index}">${action.icon ? svg(action.icon) : ""}<span>${escapeHtml(action.label)}</span></button>`)
@@ -646,19 +780,95 @@ export class Panel {
     sheet.innerHTML = `
       <div class="media">${media}</div>
       <div class="footer">
-        <span class="meta">${parts.join(" · ")}</span>
+        <span class="meta"></span>
         <button data-action="retake">${ICONS.rotate_ccw}Retake</button>
         ${result.kind === "photo" ? `<button data-action="copy">${ICONS.copy}Copy</button>` : ""}
+        ${video ? `<div class="formats" role="group" aria-label="Keep as"><button data-action="format" data-value="video" aria-pressed="true">Video</button><button data-action="format" data-value="gif" aria-pressed="false">GIF</button></div>` : ""}
         ${actions}
-        <button class="go" data-action="download">${ICONS.download}Download</button>
+        <button class="go" data-action="download">${ICONS.download}<span>Download</span></button>
       </div>`;
+    this.renderMeta();
     this.$(".backdrop").hidden = false;
     sheet.hidden = false;
     sheet.querySelector<HTMLButtonElement>(".go")?.focus();
+    if (!video) return;
+    const element = sheet.querySelector("video")!;
+    element.addEventListener("click", () => (element.paused ? void element.play() : element.pause()));
+    element.addEventListener(
+      "loadedmetadata",
+      () => {
+        const duration = Number.isFinite(element.duration) && element.duration > 0 ? element.duration : (result.seconds ?? 0);
+        if (duration < 0.5 || this.result !== result) return;
+        this.trim = new TrimBar(element, result, duration, this.layer, () => this.renderMeta());
+        sheet.querySelector(".media")!.after(this.trim.element);
+      },
+      { once: true },
+    );
+  }
+
+  /** The take's size, length, weight and kind, as it will be kept. */
+  private renderMeta() {
+    const result = this.result;
+    if (!result) return;
+    const edit = this.edit();
+    const edited = !!edit && isEdited(edit, this.duration());
+    const gif = this.format === "gif";
+    const ext = gif ? "GIF" : result.type.includes("mp4") ? "MP4" : result.type.includes("png") ? "PNG" : "WebM";
+    const seconds = edit ? lengthOf(edit) : result.seconds;
+    // The weight only as filmed: trimmed, sped or a GIF, it's known once it's made.
+    const parts = [`${result.width} × ${result.height}`, seconds ? `${seconds.toFixed(1)} s` : "", edited || gif ? "" : `${(result.blob.size / 1e6).toFixed(1)} MB`, ext].filter(Boolean);
+    const meta = this.$(".sheet .meta");
+    if (meta) meta.textContent = parts.join(" · ");
+  }
+
+  private duration() {
+    return this.trim?.duration ?? this.result?.seconds ?? 0;
+  }
+
+  private edit(): Edit | null {
+    if (this.result?.kind !== "video") return null;
+    return this.trim?.edit ?? whole(this.result.seconds ?? 0);
+  }
+
+  /**
+   * The take as it's kept: as filmed, or trimmed and at its speed (made once for each edit), or
+   * a GIF of that; `progress` hears how far the making has got.
+   */
+  private keep(format: "video" | "gif", progress: (done: number) => void): Promise<Blob> {
+    const result = this.result!;
+    const edit = this.edit();
+    if (!edit || (format === "video" && !isEdited(edit, this.duration()))) return Promise.resolve(result.blob);
+    const key = `${format}:${edit.from.toFixed(3)}:${edit.to.toFixed(3)}:${edit.speed}`;
+    const made = this.made.get(key);
+    if (made) return made;
+    this.making ??= new AbortController();
+    const options = { progress, signal: this.making.signal };
+    const making =
+      format === "gif"
+        ? gifOf(result, edit, this.layer, options)
+        : editedVideo(result, edit, this.layer, { ...options, bitrate: this.settings.quality === "high" ? 40_000_000 : 12_000_000 }).then((video) => video.blob);
+    // A making that failed is made again next time.
+    making.catch(() => this.made.delete(key));
+    this.made.set(key, making);
+    return making;
+  }
+
+  /** The take as handed to an action: trimmed and at its speed when it's been edited. */
+  private async kept(progress: (done: number) => void): Promise<Result> {
+    const result = this.result!;
+    const blob = await this.keep("video", progress);
+    if (blob === result.blob) return result;
+    const edit = this.edit()!;
+    return { ...result, blob, type: blob.type || result.type, seconds: lengthOf(edit) };
   }
 
   private closePreview() {
     if (this.state !== "preview") return;
+    this.making?.abort();
+    this.making = null;
+    this.trim?.destroy();
+    this.trim = null;
+    this.made.clear();
     this.$(".sheet").hidden = true;
     this.$(".backdrop").hidden = true;
     this.$(".sheet").innerHTML = "";
@@ -669,37 +879,58 @@ export class Panel {
     this.showControls();
   }
 
-  private download() {
-    if (!this.result) return;
-    const ext = this.result.type.includes("mp4") ? "mp4" : this.result.type.includes("png") ? "png" : "webm";
-    const link = document.createElement("a");
-    link.href = this.resultUrl;
-    link.download = `closeup-${stamp()}.${ext}`;
-    link.click();
+  /** Saves the take as it's kept, its button saying how far the making has got. */
+  private async download() {
+    const result = this.result;
+    const button = this.$<HTMLButtonElement>(".sheet .go");
+    if (!result || !button || button.disabled) return;
+    const format = result.kind === "video" ? this.format : "video";
+    const label = button.querySelector("span")!;
+    const doing = format === "gif" ? "Making the GIF" : "Trimming";
+    button.disabled = true;
+    try {
+      const blob = await this.keep(format, (done) => (label.textContent = `${doing} ${Math.round(done * 100)}%`));
+      const ext = format === "gif" ? "gif" : result.type.includes("mp4") ? "mp4" : result.type.includes("png") ? "png" : "webm";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `closeup-${stamp()}.${ext}`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      if (format === "gif" || blob !== result.blob) this.toast(`${(blob.size / 1e6).toFixed(1)} MB, downloaded.`);
+    } catch (error) {
+      if ((error as Error).name !== "AbortError") this.toast(`Couldn't make it: ${(error as Error).message}`);
+    } finally {
+      if (button.isConnected) {
+        label.textContent = "Download";
+        button.disabled = false;
+      }
+    }
   }
 
   /**
-   * Runs one of the page's own actions on the take: its button counts up while it works, then
-   * shows it's done (once is enough), and what it said, or why it failed, is said in a toast.
+   * Runs one of the page's own actions on the take as it's kept: its button counts up while it
+   * works (the trimming first, if it's been edited), then shows it's done (once is enough), and
+   * what it said, or why it failed, is said in a toast.
    */
   private async runAction(index: number, button: HTMLButtonElement) {
     const action = this.takeActions[index];
-    const result = this.result;
-    if (!action || !result || button.disabled) return;
+    if (!action || !this.result || button.disabled) return;
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     const label = button.querySelector("span");
-    const progress = (done: number) => {
-      if (label) label.textContent = `${action.label} ${Math.round(Math.min(1, Math.max(0, done)) * 100)}%`;
+    const say = (words: string, done: number) => {
+      if (label) label.textContent = `${words} ${Math.round(Math.min(1, Math.max(0, done)) * 100)}%`;
     };
     try {
-      const said = await action.run(result, { progress });
+      const take = await this.kept((done) => say("Trimming", done));
+      const said = await action.run(take, { progress: (done) => say(action.label, done) });
       button.innerHTML = `${ICONS.check}<span>${escapeHtml(action.label)}</span>`;
       this.toast(said || "Saved.");
     } catch (error) {
       if (label) label.textContent = action.label;
       button.disabled = false;
-      this.toast((error as Error).message || "That didn't work.");
+      if ((error as Error).name !== "AbortError") this.toast((error as Error).message || "That didn't work.");
     } finally {
       button.removeAttribute("aria-busy");
     }

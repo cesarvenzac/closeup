@@ -1,8 +1,11 @@
 /**
  * A scripted take: where the drawn cursor starts, where it goes, by which curves, and what it
- * does on arriving (click, type, or nothing but rest there, which is hovering). Plain data,
- * saved as JSON, so a scene can be played again after the page changes. Pure: the player
+ * does on arriving (click, type, scroll, or nothing but rest there, which is hovering). Plain
+ * data, saved as JSON, so a scene can be played again after the page changes. Pure: the player
  * (`player.ts`) reads it, the editor writes it.
+ *
+ * Version 1 had no scrolling; version 2 adds it. A script that doesn't scroll is still written
+ * as version 1, so Closeup 0.x reads it too.
  */
 
 import { type Point, reachTime } from "./path.ts";
@@ -14,7 +17,7 @@ import { type Point, reachTime } from "./path.ts";
  */
 export type Target = { x: number; y: number; on?: { selector: string; u: number; v: number } };
 
-export type Action = "move" | "click" | "type";
+export type Action = "move" | "click" | "type" | "scroll";
 
 export type Step = {
   to: Target;
@@ -26,6 +29,11 @@ export type Step = {
   action: Action;
   /** What "type" types. */
   text?: string;
+  /**
+   * How far "scroll" scrolls, in page pixels, down when positive: as a wheel turned under the
+   * point would, so a part of the page that scrolls there scrolls, and otherwise the page.
+   */
+  scroll?: number;
   /** Seconds resting on arrival before clicking or typing, to show what hovering does. */
   hover?: number;
   /** Seconds the move here takes; none for a hand's pace (Fitts's law). */
@@ -35,7 +43,8 @@ export type Step = {
 };
 
 export type Script = {
-  version: 1;
+  /** 2 once a step scrolls; 1 otherwise, as Closeup 0.x wrote them. */
+  version: 1 | 2;
   start: Target;
   /** The handle leaving the start. */
   out?: Point;
@@ -49,6 +58,14 @@ export const LEAD = 0.6;
 export const TAIL = 0.8;
 /** A click: the button held this long. */
 export const PRESS = 0.075;
+/** The most a scroll step may scroll, either way, in page pixels. */
+export const SCROLL_MOST = 20_000;
+
+/**
+ * How long a scroll takes: a moment to start and stop, and about 450 page pixels a second
+ * between, slow enough to read what goes by. At most six seconds.
+ */
+export const scrollDuration = (distance: number) => (distance ? Math.min(6, 0.5 + Math.abs(distance) / 450) : 0);
 
 /**
  * Minimum jerk: how a hand covers a reach, slow to start, quickest midway, slow to arrive
@@ -88,13 +105,18 @@ export function typingDelays(text: string): number[] {
   });
 }
 
-/** How long a step's action lasts once there: a press, or the press and the typing. */
+/** How long a step's action lasts once there: a press, the press and the typing, or the scroll. */
 export const actionDuration = (step: Step) =>
   step.action === "click"
     ? (step.hover ?? 0) + PRESS
     : step.action === "type"
       ? (step.hover ?? 0) + PRESS + typingDelays(step.text ?? "").reduce((a, b) => a + b, 0)
-      : 0;
+      : step.action === "scroll"
+        ? (step.hover ?? 0) + scrollDuration(step.scroll ?? 0)
+        : 0;
+
+/** The version a script is written as: 2 once a step scrolls, else 1. */
+export const versionOf = (steps: Step[]): Script["version"] => (steps.some((step) => step.action === "scroll") ? 2 : 1);
 
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const pointOf = (value: unknown): Point | undefined => {
@@ -109,10 +131,10 @@ function targetOf(value: unknown): Target | undefined {
   return { x: t.x, y: t.y, ...(anchored ? { on: { selector: on.selector, u: on.u, v: on.v } } : {}) };
 }
 
-/** A script read back from storage or a file, or null if it isn't one; anything unknown is dropped. */
+/** A script read back from storage or a file (either version), or null if it isn't one; anything unknown is dropped. */
 export function parseScript(value: unknown): Script | null {
   const raw = value as Partial<Script> | null;
-  if (!raw || raw.version !== 1 || !Array.isArray(raw.steps)) return null;
+  if (!raw || (raw.version !== 1 && raw.version !== 2) || !Array.isArray(raw.steps)) return null;
   const start = targetOf(raw.start);
   if (!start) return null;
   const steps: Step[] = [];
@@ -120,17 +142,19 @@ export function parseScript(value: unknown): Script | null {
     const s = item as Partial<Step>;
     const to = targetOf(s?.to);
     if (!to) return null;
-    const action: Action = s.action === "click" || s.action === "type" ? s.action : "move";
+    // Scrolling came with version 2: a version 1 script never scrolls.
+    const action: Action = s.action === "click" || s.action === "type" || (s.action === "scroll" && raw.version === 2) ? s.action : "move";
     steps.push({
       to,
       ...(pointOf(s.in) ? { in: pointOf(s.in) } : {}),
       ...(pointOf(s.out) ? { out: pointOf(s.out) } : {}),
       action,
       ...(action === "type" ? { text: typeof s.text === "string" ? s.text : "" } : {}),
+      ...(action === "scroll" ? { scroll: isNumber(s.scroll) ? Math.max(-SCROLL_MOST, Math.min(SCROLL_MOST, s.scroll)) : 0 } : {}),
       ...(action !== "move" && isNumber(s.hover) && s.hover > 0 ? { hover: s.hover } : {}),
       ...(isNumber(s.duration) && s.duration >= 0 ? { duration: s.duration } : {}),
       wait: isNumber(s.wait) && s.wait >= 0 ? s.wait : 0,
     });
   }
-  return { version: 1, start, ...(pointOf(raw.out) ? { out: pointOf(raw.out) } : {}), steps };
+  return { version: versionOf(steps), start, ...(pointOf(raw.out) ? { out: pointOf(raw.out) } : {}), steps };
 }

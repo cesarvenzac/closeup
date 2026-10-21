@@ -26,7 +26,7 @@ export type TakeAction = {
 const registered = new Set<TakeAction>();
 
 /** Offers `action` on every take from now on. Returns what takes it away. */
-export function addAction(action: TakeAction) {
+export function addAction(action: TakeAction): () => void {
   registered.add(action);
   return () => void registered.delete(action);
 }

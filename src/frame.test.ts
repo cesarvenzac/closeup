@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FILL, fillFor, frameAround, insetRect, MOST_SCALE, pixelSize, ROOM, stageFor, toPage, toScreen } from "./frame.ts";
+import { cameraView, FILL, fillFor, frameAround, insetRect, MOST_SCALE, panRange, pixelSize, ROOM, shownBy, stageFor, toPage, toScreen } from "./frame.ts";
 
 describe("frameAround", () => {
   it("grows the target by its padding and keeps its centre", () => {
@@ -83,5 +83,62 @@ describe("insetRect", () => {
     expect(inner.width / inner.height).toBeCloseTo(1920 / 1080);
     expect(inner.y).toBeCloseTo(108);
     expect(inner.x + inner.width / 2).toBeCloseTo(960);
+  });
+});
+
+describe("the camera", () => {
+  const viewport = { width: 1000, height: 800 };
+  const frame = { x: 100, y: 100, width: 400, height: 300 };
+  const scroll = { x: 0, y: 50 };
+  const stage = stageFor(frame, viewport, 0.8, scroll);
+  const near = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+    expect(a.x).toBeCloseTo(b.x, 6);
+    expect(a.y).toBeCloseTo(b.y, 6);
+  };
+
+  it("is the stage itself at no zoom and no pan", () => {
+    const view = cameraView(stage, scroll, 1, { x: 0, y: 0 }, 0);
+    expect(view).toEqual({ scale: stage.scale, tx: stage.tx, ty: stage.ty });
+    const shown = shownBy(view, scroll, stage.screen);
+    near(shown, { x: frame.x, y: frame.y + scroll.y });
+    expect(shown.width).toBeCloseTo(frame.width, 6);
+  });
+
+  it("zooms toward a point, keeping it where it is on screen", () => {
+    const focus = { x: frame.x + 200, y: frame.y + scroll.y + 150 };
+    const view = cameraView(stage, scroll, 2, focus, 0);
+    expect(view.scale).toBeCloseTo(stage.scale * 2, 9);
+    near(toScreen(view, scroll, focus), toScreen(stage, scroll, focus));
+  });
+
+  it("never shows past what the stage showed, however near the edge it zooms", () => {
+    const corner = { x: frame.x + 5, y: frame.y + scroll.y + 5 };
+    const view = cameraView(stage, scroll, 2, corner, 0);
+    const shown = shownBy(view, scroll, stage.screen);
+    const outer = shownBy(stage, scroll, stage.screen);
+    expect(shown.x).toBeGreaterThanOrEqual(outer.x - 1e-9);
+    expect(shown.y).toBeGreaterThanOrEqual(outer.y - 1e-9);
+    expect(shown.width).toBeCloseTo(outer.width / 2, 6);
+  });
+
+  it("pans down the page as far as the page goes, and shows what's further down", () => {
+    const range = panRange(stage, scroll, 2000);
+    const shownAtStart = shownBy(stage, scroll, stage.screen);
+    expect(range[0]).toBeCloseTo(-shownAtStart.y, 6);
+    expect(range[1]).toBeCloseTo(2000 - (shownAtStart.y + shownAtStart.height), 6);
+    const view = cameraView(stage, scroll, 1, { x: 0, y: 0 }, 120, range);
+    expect(shownBy(view, scroll, stage.screen).y).toBeCloseTo(shownAtStart.y + 120, 6);
+    const past = cameraView(stage, scroll, 1, { x: 0, y: 0 }, 1e6, range);
+    expect(shownBy(past, scroll, stage.screen).y + shownAtStart.height).toBeCloseTo(2000, 6);
+    expect(panRange(stage, scroll, 10)).toEqual([expect.any(Number), 0]);
+  });
+
+  it("zooms within where it's panned to", () => {
+    const range = panRange(stage, scroll, 2000);
+    const view = cameraView(stage, scroll, 1.5, { x: frame.x + 200, y: frame.y + scroll.y + 400 }, 300, range);
+    const panned = shownBy(cameraView(stage, scroll, 1, { x: 0, y: 0 }, 300, range), scroll, stage.screen);
+    const shown = shownBy(view, scroll, stage.screen);
+    expect(shown.y).toBeGreaterThanOrEqual(panned.y - 1e-9);
+    expect(shown.y + shown.height).toBeLessThanOrEqual(panned.y + panned.height + 1e-9);
   });
 });

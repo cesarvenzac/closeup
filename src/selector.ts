@@ -7,12 +7,12 @@
 
 /** Utility classes say how something looks, not what it is. */
 const UTILITY =
-  /[[\]:/.]|^-?(?:[mp][xytrbl]?|w|h|min|max|gap|text|bg|border|rounded|items|justify|self|place|font|leading|tracking|basis|col|row|z|top|left|right|bottom|inset|opacity|duration|ease|delay|translate|scale|rotate|cursor|select|pointer|size|space|divide|whitespace|break|aspect|object|fill|stroke|decoration|origin|animate)-|^(?:flex|grid|block|inline|hidden|contents|relative|absolute|fixed|sticky|static|shrink|grow|overflow|shadow|ring|outline|transition|truncate|sr-only|isolate|group|peer|italic|uppercase|lowercase|capitalize|antialiased)/;
+  /[[\]:/.]|^-?(?:[mp][xytrbl]?|w|h|min|max|gap|text|bg|border|rounded|items|justify|self|place|font|leading|tracking|basis|col|row|z|top|left|right|bottom|inset|opacity|duration|ease|delay|translate|scale|rotate|cursor|select|pointer|size|space|divide|whitespace|break|aspect|object|fill|stroke|decoration|origin|animate)-|^(?:flex|grid|block|inline|hidden|contents|relative|absolute|fixed|sticky|static|shrink|grow|overflow|shadow|ring|outline|transition|truncate|sr-only|isolate|group|peer|italic|uppercase|lowercase|capitalize|antialiased|border|rounded|underline|container)$|^(?:flex|grid|block|inline|hidden|contents|relative|absolute|fixed|sticky|static|shrink|grow|overflow|shadow|ring|outline|transition|truncate|sr-only|isolate|group|peer|italic|uppercase|lowercase|capitalize|antialiased)/;
 
 export const isUtility = (name: string) => UTILITY.test(name);
 
-/** Ids that frameworks generate per render (React's useId, Radix, Headless UI, MUI), or that carry a counter. */
-export const isStableId = (id: string) => !!id && !/^(?:_R_|:r|«r|radix-|headlessui-|mui-|react-aria)|[:«»]|\d{3,}/.test(id);
+/** Ids that frameworks generate per render (React's useId, and the libraries built on it: Radix, Base UI, Headless UI, MUI), or that carry a counter. */
+export const isStableId = (id: string) => !!id && !/^(?:_R_|:r|«r|radix-|base-ui-|headlessui-|mui-|react-aria)|_R_|[:«»]|\d{3,}/.test(id);
 
 /** The classes worth naming an element by. */
 export const meaningfulClasses = (element: Element) => [...element.classList].filter((name) => !isUtility(name));

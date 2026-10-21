@@ -30,13 +30,18 @@ export class SyntheticPointer {
   /** `hit` finds the page's element at a point, Closeup's own layers left out. */
   constructor(private readonly hit: Hit) {}
 
-  /** Moves to a point on screen: over, out, enter and leave where the element under it changes, then a move. */
-  moveTo(x: number, y: number) {
+  /**
+   * Moves to a point on screen: over, out, enter and leave where the element under it changes,
+   * then a move. `quiet` is for the page moving under a still hand (the camera closing in, a
+   * scroll): what it's over is brought up to date, as browsers do, but nothing says it moved.
+   */
+  moveTo(x: number, y: number, { quiet = false } = {}) {
     const target = this.hit(x, y) ?? document.documentElement;
     const moved = { x: x - this.x, y: y - this.y };
     this.x = x;
     this.y = y;
     if (target !== this.over) this.cross(target);
+    if (quiet) return;
     this.send(target, "pointermove", { movementX: moved.x, movementY: moved.y });
     this.send(target, "mousemove", { movementX: moved.x, movementY: moved.y });
   }

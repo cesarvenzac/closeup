@@ -33,10 +33,21 @@ export type Settings = {
   ring: boolean;
   /** Who moves the cursor in a video: your mouse, or the page's saved script. */
   moves: "yours" | "script";
+  /** How close the camera comes to each click and to typing, in a video: 1, not at all. */
+  zoom: number;
+  /** Seconds counted down before a video by hand starts recording, to get a hand to the mouse. */
+  countdown: number;
+  /** Seconds counted down before a photo is taken, to open a menu or hover something first. */
+  timer: number;
   clicks: boolean;
   tabAudio: boolean;
   quality: "standard" | "high";
 };
+
+/** The levels the camera may close in to, the countdowns a video may have and the timers a photo may. */
+export const ZOOMS = [1, 1.5, 2] as const;
+export const COUNTDOWNS = [0, 3, 5] as const;
+export const TIMERS = [0, 3, 5, 10] as const;
 
 export const DEFAULTS: Settings = {
   mode: "video",
@@ -53,6 +64,9 @@ export const DEFAULTS: Settings = {
   cursorSize: 48,
   ring: true,
   moves: "yours",
+  zoom: 1,
+  countdown: 3,
+  timer: 0,
   clicks: true,
   tabAudio: false,
   quality: "high",
@@ -71,6 +85,9 @@ export function loadSettings(): Settings {
     if (!(settings.shape in SHAPES)) settings.shape = DEFAULTS.shape;
     if (!(settings.gradient in GRADIENTS)) settings.gradient = 0;
     if (settings.moves !== "script") settings.moves = "yours";
+    if (!(ZOOMS as readonly number[]).includes(settings.zoom)) settings.zoom = DEFAULTS.zoom;
+    if (!(COUNTDOWNS as readonly number[]).includes(settings.countdown)) settings.countdown = DEFAULTS.countdown;
+    if (!(TIMERS as readonly number[]).includes(settings.timer)) settings.timer = DEFAULTS.timer;
     return settings;
   } catch {
     return { ...DEFAULTS };
