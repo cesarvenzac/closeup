@@ -45,7 +45,8 @@ everything else dimmed. The toolbar's Options set:
 - Cursor: for a video, who moves it (your mouse or a script); whether it's drawn (a script's always
   is), its click ring and its size.
 - Recording, for a video: a countdown before a take by hand (3 seconds unless you change it), the
-  clicks' sound, the tab's own sound, and the quality. For a photo, a timer instead.
+  clicks' sound, the tab's own sound, and the quality; for a scripted take, Render (below). For a
+  photo, a timer instead.
 
 They're kept in the browser, all but a background image, which is chosen again after a reload.
 
@@ -97,6 +98,18 @@ on the stage, at the size the take is filmed:
 - With the camera set to close in, it does on each click and typing, landing as the cursor
   arrives; from one to the next nearby it glides, to one further away it draws back first, and it
   draws back at the end. The cursor travels the page, so it stays on what it's over meanwhile.
+
+### Render
+
+A scripted take can be made a frame at a time instead of recorded as it plays: under Recording,
+Render, Frame by frame. Closeup holds the page's clock (`performance.now`, `Date.now`, timers,
+animation frames, and every CSS and Web Animation) and moves it on a sixtieth of a second for
+each frame; once the tab has shown that moment, its picture is the next frame. However slowly the
+machine draws, each frame is its own moment, so the motion is even where a live recording would
+judder: a laptop on battery, a heavy page, a machine without a GPU. The take is the same length
+as a live one, but it's made slower than it plays (the time above the frame says how much is
+made), and it's silent. Code that kept its own copy of a timing function before the take started,
+and media playing in the page, keep their own time. Needs a browser that records MP4.
 
 While a script plays, the page is told about every move and press as a mouse would tell it
 (pointer and mouse events, focus), so its own code reacts: hover effects, menus, a character that

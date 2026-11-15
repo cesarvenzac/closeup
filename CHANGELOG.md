@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0
+
+Scripted takes made a frame at a time, smooth on any machine.
+
+- **Render.** A scripted take can be made a frame at a time instead of recorded as it plays
+  (Recording, Render): Closeup holds the page's clock and moves it on a sixtieth of a second for
+  each frame, so the motion is even however slowly the machine draws. Silent, and made slower than
+  it plays.
+
 ## 1.0.0
 
 A camera that closes in on clicks, scrolling while you film, and takes you can trim, speed up and

@@ -18,7 +18,7 @@ import { COUNTDOWNS, DEFAULTS, GRADIENTS, loadSettings, saveSettings, type Setti
 import type { Script } from "../script.ts";
 import { describe } from "../selector.ts";
 import { loadScript, saveScript } from "../store.ts";
-import { type Before, cameraFor, createActor, frameBox, frameOf, type Layers, pageHeight, pageHit, type Picked, type Result, type Running, startVideo, takePhoto, toRect } from "../take.ts";
+import { type Before, cameraFor, canRender, createActor, frameBox, frameOf, type Layers, pageHeight, pageHit, type Picked, type Result, type Running, startVideo, takePhoto, toRect } from "../take.ts";
 import { Editor } from "./editor.ts";
 import { TrimBar } from "./trim.ts";
 import { ICONS, svg } from "./icons.ts";
@@ -359,6 +359,7 @@ export class Panel {
     const s = this.settings;
     const video = s.mode === "video";
     const scripted = video && s.moves === "script";
+    const rendering = scripted && s.render && canRender();
     const choice = (setting: keyof Settings, value: string, label: string) =>
       `<button data-action="set" data-setting="${setting}" data-value="${value}" aria-pressed="${String(s[setting]) === value}">${label}</button>`;
     const toggle = (setting: keyof Settings, label: string) =>
@@ -412,7 +413,10 @@ export class Panel {
         video ? "Recording" : "Photo",
         video && !scripted ? row("Countdown", `<div class="choices">${COUNTDOWNS.map((n) => choice("countdown", String(n), seconds(n))).join("")}</div>`) : "",
         !video ? row("Timer", `<div class="choices">${TIMERS.map((n) => choice("timer", String(n), seconds(n))).join("")}</div>`) : "",
-        video ? row("Sound", `<div class="choices">${toggle("clicks", "Clicks")}${toggle("tabAudio", "Tab audio")}</div>`) : "",
+        // A script can be made a frame at a time: even motion on any machine, silent, slower to make.
+        scripted && canRender() ? row("Render", `<div class="choices" title="Made a frame at a time: smooth on any machine, silent, and slower to make than it lasts">${toggle("render", "Frame by frame")}</div>`) : "",
+        rendering ? row("", `<span class="note">Smooth on any machine · silent · slower to make than it lasts</span>`, true) : "",
+        video && !rendering ? row("Sound", `<div class="choices">${toggle("clicks", "Clicks")}${toggle("tabAudio", "Tab audio")}</div>`) : "",
         video ? row("Quality", `<div class="choices">${choice("quality", "standard", "Standard")}${choice("quality", "high", "High")}</div>`) : "",
       ),
       `<p class="hint"><kbd>${this.shortcutLabel}</kbd> opens and closes · <kbd>Esc</kbd> stops a take</p>`,
@@ -590,7 +594,9 @@ export class Panel {
       this.$<HTMLButtonElement>(".pause").hidden = !!script;
       const show = () => {
         const seconds = Math.floor(running.elapsed());
-        this.$(".time").textContent = running.paused ? "Paused" : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+        const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+        // A rendered take says how much of it is made: it's made slower than it plays.
+        this.$(".time").textContent = running.paused ? "Paused" : running.rendering ? `Rendering ${time}` : time;
       };
       show();
       this.timer = window.setInterval(show, 250);

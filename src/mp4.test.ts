@@ -183,6 +183,17 @@ describe("defragment", () => {
     expect(find(["moov", "trak", "edts"])).toHaveLength(1);
   });
 
+  it("gives every sample one length from the start, for a take made a frame at a time", () => {
+    const { find, view } = parse(defragment(input, { frame: 1 / 60 })!);
+    const stts = find(["moov", "trak", "mdia", "minf", "stbl", "stts"]).map((b) => Array.from({ length: view.getUint32(b.body + 4) }, (_, k) => [view.getUint32(b.body + 8 + 8 * k), view.getUint32(b.body + 12 + 8 * k)]));
+    // The video at 90000 a second, the audio at 48000: 1500 and 800 ticks a sample, the gap gone.
+    expect(stts).toEqual([[[4, 1500]], [[3, 800]]]);
+    // Nothing starts late: no edit list.
+    expect(find(["moov", "trak", "edts"])).toHaveLength(0);
+    const [mvhd] = find(["moov", "mvhd"]);
+    expect(view.getUint32(mvhd.body + 16)).toBe(Math.round((4 / 60) * 1000));
+  });
+
   it("leaves alone what it doesn't understand", () => {
     expect(defragment(new Uint8Array(64))).toBeNull();
     const regular = defragment(input)!;

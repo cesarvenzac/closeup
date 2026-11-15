@@ -42,6 +42,12 @@ export type Settings = {
   clicks: boolean;
   tabAudio: boolean;
   quality: "standard" | "high";
+  /**
+   * A scripted video made a frame at a time rather than recorded as it plays: the page's clock
+   * held and moved on a sixtieth of a second for each frame, so the motion is even on any machine.
+   * Silent, and slower to make than the take lasts.
+   */
+  render: boolean;
 };
 
 /** The levels the camera may close in to, the countdowns a video may have and the timers a photo may. */
@@ -70,6 +76,7 @@ export const DEFAULTS: Settings = {
   clicks: true,
   tabAudio: false,
   quality: "high",
+  render: false,
 };
 
 const KEY = "closeup:settings";

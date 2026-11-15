@@ -266,10 +266,11 @@ const MDHD: [number, number] = [16, 24];
 
 /**
  * The regular MP4 for a fragmented one: ftyp, then a moov whose tracks list every sample (one
- * chunk a track) and say how long they are, then the samples as they were. Null when the bytes
- * aren't a fragmented MP4 this understands.
+ * chunk a track) and say how long they are, then the samples as they were. With `frame`, every
+ * sample lasts that many seconds, from the start. Null when the bytes aren't a fragmented MP4
+ * this understands.
  */
-export function defragment(input: Uint8Array): Uint8Array | null {
+export function defragment(input: Uint8Array, { frame }: { frame?: number } = {}): Uint8Array | null {
   let parsed: ReturnType<typeof read>;
   try {
     parsed = read(input);
@@ -277,6 +278,15 @@ export function defragment(input: Uint8Array): Uint8Array | null {
     return null;
   }
   if (!parsed || !parsed.tracks.length) return null;
+  // Every sample `frame` seconds long, from the start: a take made a frame at a time (Render) was
+  // recorded at whatever pace each frame took to make, and plays at its own.
+  if (frame) {
+    for (const track of parsed.tracks) {
+      const duration = Math.max(1, Math.round(track.timescale * frame));
+      for (const sample of track.samples) sample.duration = duration;
+      track.start = 0;
+    }
+  }
   const { view, ftyp, mvhd, movieScale, tracks } = parsed;
   const copy = (box: Box) => input.slice(box.start, box.end);
   const bytesOf = (track: Track) => track.samples.reduce((total, sample) => total + sample.size, 0);
@@ -304,7 +314,7 @@ export function defragment(input: Uint8Array): Uint8Array | null {
           const tkhdBytes = copy(tkhd);
           patchDuration(tkhdBytes, ...TKHD, movieTime(track, startOf(track) + lengthOf(track)));
           out.raw(tkhdBytes);
-          if (edts) out.raw(copy(edts));
+          if (edts && !frame) out.raw(copy(edts));
           else if (startOf(track) > 0) {
             // Starts late: an empty edit until it does, then the whole track.
             out.box("edts", () =>

@@ -58,13 +58,13 @@ export function seek(video: HTMLVideoElement, t: number) {
   });
 }
 
-/** The recorder's output made a regular MP4 when it can be (`mp4.ts`), else as it was. */
-export async function regular(blob: Blob): Promise<Blob> {
+/** The recorder's output made a regular MP4 when it can be (`mp4.ts`), else as it was; with `frame`, every frame that many seconds long. */
+export async function regular(blob: Blob, { frame }: { frame?: number } = {}): Promise<Blob> {
   if (!blob.type.includes("mp4")) return blob;
   try {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     if (!isFragmented(bytes)) return blob;
-    const fixed = defragment(bytes);
+    const fixed = defragment(bytes, { frame });
     return fixed ? new Blob([fixed.buffer as ArrayBuffer], { type: blob.type }) : blob;
   } catch {
     return blob;

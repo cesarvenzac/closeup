@@ -8,6 +8,7 @@
 
 import { Camera } from "./camera.ts";
 import { cropTo, recrop, shareTab } from "./capture.ts";
+import { painted, realNow, settle, takeTime } from "./clock.ts";
 import { type Background, Compositor, type Look } from "./compositor.ts";
 import { DrawnCursor } from "./cursor.ts";
 import { fillFor, frameAround, type Rect, SHAPES, type Stage, stageFor } from "./frame.ts";
@@ -46,6 +47,8 @@ export type Running = {
   resume(): void;
   /** For a scripted take: settles once the script has played and the cursor has lingered. */
   finished?: Promise<void>;
+  /** Made a frame at a time (Render) rather than recorded as it plays. */
+  rendering?: boolean;
   stop(): Promise<Result>;
 };
 
@@ -61,7 +64,8 @@ export const toRect = ({ x, y, width, height }: DOMRectReadOnly): Rect => ({ x, 
 export const frameOf = (rect: Rect, element: Element | null, settings: Settings) =>
   frameAround(rect, element ? settings.padding : 0, SHAPES[settings.shape]);
 
-function lookOf(settings: Settings, image: ImageBitmap | null): Look {
+/** How a take is set: on nothing, or on its background (a picture needs `image`), with its room, corners and shadow. */
+export function lookOf(settings: Settings, image: ImageBitmap | null): Look {
   let background: Background = { kind: "none" };
   if (settings.background === "color") background = { kind: "color", color: settings.color };
   if (settings.background === "gradient") background = { kind: "gradient", ...GRADIENTS[settings.gradient] };
@@ -209,7 +213,7 @@ async function setUp(picked: Picked, settings: Settings, layers: Layers, image: 
     // Unwinding stops sharing first, before the zoom back out.
     undo.push(() => stream.getTracks().forEach((track) => track.stop()));
     if (mixer && audio) mixer.add(audio);
-    return { stage, camera, compositor, composed, unwind, actor, cursor, undo };
+    return { stage, camera, compositor, composed, unwind, actor, cursor, undo, box };
   } catch (error) {
     await unwind();
     throw error;
@@ -332,6 +336,7 @@ function byHand(camera: Camera, layers: Layers, level: number, cursor: DrawnCurs
  * `stop()` ends the take and puts the page back.
  */
 export async function startVideo(picked: Picked, settings: Settings, layers: Layers, image: ImageBitmap | null, script: Script | null = null, before?: Before): Promise<Running> {
+  if (script && settings.render && canRender()) return renderVideo(picked, settings, layers, image, script);
   // Made in the click that started the take: audio started later can be refused.
   const mixer = settings.clicks || settings.tabAudio ? new Mixer() : null;
   let setup: Awaited<ReturnType<typeof setUp>>;
@@ -408,6 +413,99 @@ export async function startVideo(picked: Picked, settings: Settings, layers: Lay
       // A regular MP4 rather than the recorder's fragments: it seeks, and says how long it is, everywhere.
       const blob = await regular(new Blob(chunks, { type: blobType }));
       return { kind: "video", blob, type: blobType, ...size, seconds, ...(script ? { script } : {}) };
+    },
+  };
+}
+
+/** Frames a second in a rendered take. */
+export const RENDER_FPS = 60;
+/** The longest a rendered take runs: a script that never ends is stopped here. */
+const RENDER_MOST = 10 * 60 * RENDER_FPS;
+/** An MP4 the recorder can write: a rendered take's frames are given their length once it's made, which only an MP4 lets them. */
+const RENDER_TYPES = ["video/mp4;codecs=avc1.640033", "video/mp4;codecs=avc1", "video/mp4"];
+
+/** Whether this browser can render a take: an MP4 recorder, and a video's frames handed over one by one. */
+export const canRender = () =>
+  typeof MediaRecorder !== "undefined" && RENDER_TYPES.some((type) => MediaRecorder.isTypeSupported(type)) && typeof HTMLVideoElement !== "undefined" && "requestVideoFrameCallback" in HTMLVideoElement.prototype;
+
+type CanvasTrack = MediaStreamTrack & { requestFrame(): void };
+
+/**
+ * A scripted take made a frame at a time (Render). Staged and played as a live take is, but on a
+ * clock Closeup holds (`clock.ts`): from the moment it starts, time moves on a sixtieth of a second,
+ * the page draws that moment, and once the tab has sent a picture taken after it (`frameAfter`),
+ * that picture is the take's next frame. However slowly the page draws, every frame is its own
+ * moment: the motion is even on any machine. The recorder gets one frame a step, at its own pace,
+ * so each is given a sixtieth of a second when the take is made (`regular`'s `frame`). Silent.
+ */
+async function renderVideo(picked: Picked, settings: Settings, layers: Layers, image: ImageBitmap | null, script: Script): Promise<Running> {
+  const { stage, camera, compositor, unwind, actor, box } = await setUp(picked, settings, layers, image, null, script);
+  const output = compositor.canvas.captureStream(0).getVideoTracks()[0] as CanvasTrack;
+  const type = RENDER_TYPES.find((candidate) => MediaRecorder.isTypeSupported(candidate))!;
+  const recorder = new MediaRecorder(new MediaStream([output]), { mimeType: type, videoBitsPerSecond: settings.quality === "high" ? 40_000_000 : 12_000_000 });
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (event) => event.data.size && chunks.push(event.data);
+  recorder.start(500);
+
+  // A pixel in the frame's corner (where the corners clip it on a background) changed every step,
+  // so the tab sends a picture even when nothing else moved.
+  const pixel = document.createElement("div");
+  Object.assign(pixel.style, { position: "absolute", left: "0", top: "0", width: "1px", height: "1px" });
+  box.append(pixel);
+  let lit = false;
+
+  const clock = takeTime();
+  const playing = new AbortController();
+  let played = false;
+  let stopping = false;
+  let frames = 0;
+  const done = play(script, { ...actor!, camera, zoom: settings.zoom, signal: playing.signal })
+    .then(() => wait(TAIL * 1000))
+    .catch(() => {})
+    .finally(() => (played = true));
+  void done;
+  const rendered = (async () => {
+    for (;;) {
+      lit = !lit;
+      pixel.style.backgroundColor = `rgb(255 255 255 / ${lit ? 0.02 : 0.01})`;
+      // Only a picture the tab took once this moment was on screen will do.
+      await painted();
+      await compositor.frameAfter(realNow(), 250);
+      output.requestFrame();
+      frames++;
+      if (played || stopping || frames >= RENDER_MOST) return;
+      clock.step(1000 / RENDER_FPS);
+      // What the page does about the new moment (React drawing it, new animations) gets in, then is held too.
+      await settle();
+      clock.hold();
+    }
+  })();
+
+  return {
+    screen: stage.screen,
+    elapsed: () => frames / RENDER_FPS,
+    rendering: true,
+    finished: rendered,
+    get paused() {
+      return false;
+    },
+    pause() {},
+    resume() {},
+    async stop() {
+      stopping = true;
+      playing.abort();
+      await rendered;
+      await new Promise<void>((resolve) => {
+        recorder.onstop = () => resolve();
+        recorder.stop();
+      });
+      clock.release();
+      pixel.remove();
+      const size = compositor.size;
+      await unwind();
+      // Each frame a sixtieth of a second, however long it took to make.
+      const blob = await regular(new Blob(chunks, { type: "video/mp4" }), { frame: 1 / RENDER_FPS });
+      return { kind: "video", blob, type: "video/mp4", ...size, seconds: frames / RENDER_FPS, script };
     },
   };
 }

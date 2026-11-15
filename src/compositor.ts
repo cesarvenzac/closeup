@@ -7,6 +7,10 @@
 
 import { insetRect } from "./frame.ts";
 
+// The page's own timers: while a take is rendered, Closeup holds the page's clock (`clock.ts`).
+const realTimeout = setTimeout.bind(globalThis);
+const realClear = clearTimeout.bind(globalThis);
+
 export type Background =
   | { kind: "none" }
   | { kind: "color"; color: string }
@@ -60,10 +64,13 @@ export class Compositor {
     this.canvas.height = video.videoHeight;
     this.output = this.canvas.captureStream(0).getVideoTracks()[0] as CanvasTrack;
     this.draw();
-    const loop = () => {
+    const loop = (now: number, frame: { captureTime?: number }) => {
       if (this.stopped) return;
       this.draw();
       this.output?.requestFrame();
+      // When the tab drew it (else when it got here), for what waits for a picture taken after a moment.
+      this.latest = frame.captureTime ?? now;
+      for (const waiting of [...this.waiting]) if (this.latest >= waiting.after) waiting.done(true);
       this.callback = video.requestVideoFrameCallback(loop);
     };
     this.callback = video.requestVideoFrameCallback(loop);
@@ -72,6 +79,29 @@ export class Compositor {
 
   get size() {
     return { width: this.canvas.width, height: this.canvas.height };
+  }
+
+  private latest = 0;
+  private readonly waiting = new Set<{ after: number; done: (fresh: boolean) => void }>();
+
+  /**
+   * Resolves once the canvas holds a picture the tab took after `after` (on the page's own clock,
+   * `realNow`): true then, false if none came in `within` ms (nothing on the page changed).
+   */
+  frameAfter(after: number, within: number): Promise<boolean> {
+    if (this.latest >= after) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const waiting = {
+        after,
+        done: (fresh: boolean) => {
+          this.waiting.delete(waiting);
+          realClear(timer);
+          resolve(fresh);
+        },
+      };
+      const timer = realTimeout(() => waiting.done(false), within);
+      this.waiting.add(waiting);
+    });
   }
 
   /** The composed frame now, as a PNG. */
@@ -89,35 +119,44 @@ export class Compositor {
   }
 
   private draw() {
-    const { context: c, canvas, video, look } = this;
-    const { width, height } = canvas;
-    if (!width || video.readyState < 2) return;
-    if (look.background.kind === "none") {
-      c.drawImage(video, 0, 0, width, height);
-      return;
-    }
-    paintBackground(c, look.background, width, height);
-    const inner = insetRect({ width, height }, look.inset);
-    const unit = Math.min(width, height) / 1080;
-    const radius = look.radius * unit;
-    if (look.shadow) {
-      c.save();
-      c.shadowColor = "rgb(0 0 0 / 0.28)";
-      c.shadowBlur = 48 * unit;
-      c.shadowOffsetY = 16 * unit;
-      c.fillStyle = "#000";
-      c.beginPath();
-      c.roundRect(inner.x, inner.y, inner.width, inner.height, radius);
-      c.fill();
-      c.restore();
-    }
+    const { context, canvas, video } = this;
+    if (!canvas.width || video.readyState < 2) return;
+    paintTake(context, video, canvas.width, canvas.height, this.look);
+  }
+}
+
+/**
+ * One frame of a take as it's kept: `source` (a frame of the capture) alone, or set on the look's
+ * background with room round it, rounded corners and a soft shadow, on a canvas `width` by
+ * `height` (the capture's own size). The recorder draws every frame with it, and so does anything
+ * that makes a take's frames some other way.
+ */
+export function paintTake(c: CanvasRenderingContext2D, source: CanvasImageSource, width: number, height: number, look: Look) {
+  if (look.background.kind === "none") {
+    c.drawImage(source, 0, 0, width, height);
+    return;
+  }
+  paintBackground(c, look.background, width, height);
+  const inner = insetRect({ width, height }, look.inset);
+  const unit = Math.min(width, height) / 1080;
+  const radius = look.radius * unit;
+  if (look.shadow) {
     c.save();
+    c.shadowColor = "rgb(0 0 0 / 0.28)";
+    c.shadowBlur = 48 * unit;
+    c.shadowOffsetY = 16 * unit;
+    c.fillStyle = "#000";
     c.beginPath();
     c.roundRect(inner.x, inner.y, inner.width, inner.height, radius);
-    c.clip();
-    c.drawImage(video, inner.x, inner.y, inner.width, inner.height);
+    c.fill();
     c.restore();
   }
+  c.save();
+  c.beginPath();
+  c.roundRect(inner.x, inner.y, inner.width, inner.height, radius);
+  c.clip();
+  c.drawImage(source, inner.x, inner.y, inner.width, inner.height);
+  c.restore();
 }
 
 function paintBackground(c: CanvasRenderingContext2D, background: Background, width: number, height: number) {
