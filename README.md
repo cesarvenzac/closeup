@@ -108,8 +108,14 @@ each frame; once the tab has shown that moment, its picture is the next frame. H
 machine draws, each frame is its own moment, so the motion is even where a live recording would
 judder: a laptop on battery, a heavy page, a machine without a GPU. The take is the same length
 as a live one, but it's made slower than it plays (the time above the frame says how much is
-made), and it's silent. Code that kept its own copy of a timing function before the take started,
-and media playing in the page, keep their own time. Needs a browser that records MP4.
+made), and it's silent. Videos and sounds playing in the page are held too: moved on a step at a
+time, so a video plays at its own pace in the take, while the page is still told it plays. Code
+that kept its own copy of a timing function before the take started keeps its own time. Each frame
+is encoded (H.264, through WebCodecs) before the next is drawn, so a slow encoder makes the take
+slower to make, never shorter: every frame drawn is in it. A frame an odd number of pixels wide or
+tall loses its last column or row, as H.264 needs. Where the browser can't encode the take at its
+size, it's recorded instead, if the browser records MP4, and a recorder can leave out frames its
+encoder doesn't keep up with.
 
 While a script plays, the page is told about every move and press as a mouse would tell it
 (pointer and mouse events, focus), so its own code reacts: hover effects, menus, a character that

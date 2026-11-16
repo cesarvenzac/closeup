@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.1
+
+Render keeps every frame, however slowly the machine encodes.
+
+- **Every frame kept.** A rendered take is now encoded as it's made (H.264, through WebCodecs),
+  each frame before the next is drawn, so a slow encoder makes the take slower to make, never
+  shorter. Before, the recorder could leave out frames its encoder didn't keep up with, without
+  saying so: a large take on a machine encoding in software lost about half of them. Where the
+  browser can't encode the take at its size, it's recorded as before. A take an odd number of
+  pixels wide or tall loses its last column or row, as H.264 needs.
+- **A take that fails says why.** If a take can't be made, the page is put back and Closeup says
+  what went wrong, instead of staying busy.
+
 ## 1.1.0
 
 Scripted takes made a frame at a time, smooth on any machine.

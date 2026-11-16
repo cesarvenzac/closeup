@@ -249,6 +249,75 @@ function runs(values: number[]) {
 }
 
 /**
+ * A track's sample tables, its samples in one chunk at `offset`: how long each lasts (stts), how
+ * far each is shown after it's decoded (ctts, when any is), which can start a decode (stss, unless
+ * all can), the chunk (stsc), each one's size (stsz) and where the chunk starts (stco, or co64).
+ */
+function sampleTables(out: Writer, samples: Pick<Sample, "duration" | "size" | "sync" | "cto">[], offset: number, wide: boolean) {
+  const durations = runs(samples.map((sample) => sample.duration));
+  out.full("stts", 0, 0, () => {
+    out.u32(durations.length);
+    for (const [count, value] of durations) {
+      out.u32(count);
+      out.u32(value);
+    }
+  });
+  if (samples.some((sample) => sample.cto !== 0)) {
+    const offsets = runs(samples.map((sample) => sample.cto));
+    const negative = offsets.some(([, value]) => value < 0);
+    out.full("ctts", negative ? 1 : 0, 0, () => {
+      out.u32(offsets.length);
+      for (const [count, value] of offsets) {
+        out.u32(count);
+        if (negative) out.i32(value);
+        else out.u32(value);
+      }
+    });
+  }
+  if (!samples.every((sample) => sample.sync)) {
+    const syncs = samples.flatMap((sample, k) => (sample.sync ? [k + 1] : []));
+    out.full("stss", 0, 0, () => {
+      out.u32(syncs.length);
+      for (const k of syncs) out.u32(k);
+    });
+  }
+  out.full("stsc", 0, 0, () => {
+    out.u32(1);
+    out.u32(1);
+    out.u32(samples.length);
+    out.u32(1);
+  });
+  out.full("stsz", 0, 0, () => {
+    out.u32(0);
+    out.u32(samples.length);
+    for (const sample of samples) out.u32(sample.size);
+  });
+  if (wide)
+    out.full("co64", 0, 0, () => {
+      out.u32(1);
+      out.u64(offset);
+    });
+  else
+    out.full("stco", 0, 0, () => {
+      out.u32(1);
+      out.u32(offset);
+    });
+}
+
+/** An mdat's header for `bytes` of media: 8 bytes, or 16 when it needs a 64-bit size. */
+function mdatHeader(bytes: number) {
+  const large = bytes + 8 > 0xffffffff;
+  const header = new Uint8Array(large ? 16 : 8);
+  const view = new DataView(header.buffer);
+  header.set([0x6d, 0x64, 0x61, 0x74], 4);
+  if (large) {
+    view.setUint32(0, 1);
+    view.setBigUint64(8, BigInt(bytes + 16));
+  } else view.setUint32(0, bytes + 8);
+  return header;
+}
+
+/**
  * Writes a duration where a full box keeps it: `at32` bytes into its body (its version and flags
  * included) when it's version 0, as 32 bits, or `at64` when it's version 1, as 64.
  */
@@ -342,54 +411,7 @@ export function defragment(input: Uint8Array, { frame }: { frame?: number } = {}
               out.box("stbl", () => {
                 const stsd = child(input, view, stbl, "stsd");
                 if (stsd) out.raw(copy(stsd));
-                const durations = runs(track.samples.map((sample) => sample.duration));
-                out.full("stts", 0, 0, () => {
-                  out.u32(durations.length);
-                  for (const [count, value] of durations) {
-                    out.u32(count);
-                    out.u32(value);
-                  }
-                });
-                if (track.samples.some((sample) => sample.cto !== 0)) {
-                  const offsets = runs(track.samples.map((sample) => sample.cto));
-                  const negative = offsets.some(([, value]) => value < 0);
-                  out.full("ctts", negative ? 1 : 0, 0, () => {
-                    out.u32(offsets.length);
-                    for (const [count, value] of offsets) {
-                      out.u32(count);
-                      if (negative) out.i32(value);
-                      else out.u32(value);
-                    }
-                  });
-                }
-                if (!track.samples.every((sample) => sample.sync)) {
-                  const syncs = track.samples.flatMap((sample, k) => (sample.sync ? [k + 1] : []));
-                  out.full("stss", 0, 0, () => {
-                    out.u32(syncs.length);
-                    for (const k of syncs) out.u32(k);
-                  });
-                }
-                out.full("stsc", 0, 0, () => {
-                  out.u32(1);
-                  out.u32(1);
-                  out.u32(track.samples.length);
-                  out.u32(1);
-                });
-                out.full("stsz", 0, 0, () => {
-                  out.u32(0);
-                  out.u32(track.samples.length);
-                  for (const sample of track.samples) out.u32(sample.size);
-                });
-                if (wide)
-                  out.full("co64", 0, 0, () => {
-                    out.u32(1);
-                    out.u64(chunkOffsets[index]);
-                  });
-                else
-                  out.full("stco", 0, 0, () => {
-                    out.u32(1);
-                    out.u32(chunkOffsets[index]);
-                  });
+                sampleTables(out, track.samples, chunkOffsets[index], wide);
               });
             });
           });
@@ -403,28 +425,20 @@ export function defragment(input: Uint8Array, { frame }: { frame?: number } = {}
   const wide = ftypBytes.length + mediaBytes + 1e6 > 0xffffffff;
   // Measured once with stand-in offsets, then written with the real ones (the same size).
   const moovSize = moovOf(tracks.map(() => 0), wide).length;
-  const mdatHeader = mediaBytes + 8 > 0xffffffff ? 16 : 8;
+  const mdat = mdatHeader(mediaBytes);
   const offsets: number[] = [];
-  let at = ftypBytes.length + moovSize + mdatHeader;
+  let at = ftypBytes.length + moovSize + mdat.length;
   for (const track of tracks) {
     offsets.push(at);
     at += bytesOf(track);
   }
   const moov = moovOf(offsets, wide);
-  const output = new Uint8Array(ftypBytes.length + moov.length + mdatHeader + mediaBytes);
-  const out = new DataView(output.buffer);
+  const output = new Uint8Array(ftypBytes.length + moov.length + mdat.length + mediaBytes);
   output.set(ftypBytes, 0);
   output.set(moov, ftypBytes.length);
   let p = ftypBytes.length + moov.length;
-  if (mdatHeader === 16) {
-    out.setUint32(p, 1);
-    output.set([0x6d, 0x64, 0x61, 0x74], p + 4);
-    out.setBigUint64(p + 8, BigInt(mediaBytes + 16));
-  } else {
-    out.setUint32(p, mediaBytes + 8);
-    output.set([0x6d, 0x64, 0x61, 0x74], p + 4);
-  }
-  p += mdatHeader;
+  output.set(mdat, p);
+  p += mdat.length;
   for (const track of tracks) for (const sample of track.samples) output.set(input.subarray(sample.offset, sample.offset + sample.size), (p += sample.size) - sample.size);
   return output;
 }
@@ -438,5 +452,227 @@ export function isFragmented(input: Uint8Array) {
     return !!moov && !!child(input, view, moov, "mvex") && top.some((b) => b.type === "moof");
   } catch {
     return false;
+  }
+}
+
+/** Ticks a second on a made video's clock: a whole number of them a frame at 24, 25, 30, 50 or 60 a second. */
+const TIMESCALE = 90_000;
+
+/**
+ * A video's frames as an encoder hands them over (WebCodecs' `VideoEncoder`): H.264 with each NAL
+ * unit after its length (its `avc` format), and what a decoder needs to read them.
+ */
+export type EncodedVideo = {
+  width: number;
+  height: number;
+  /** The decoder's configuration, an avcC record: the encoder's `decoderConfig.description`. */
+  avcC: Uint8Array;
+  /** Frames a second: each frame lasts one of them. */
+  fps: number;
+  /** In the order they're decoded: each one's size in bytes, whether a decode can start there, and which frame of the video it shows, from 0. */
+  frames: { size: number; key: boolean; at: number }[];
+};
+
+/**
+ * Everything a regular MP4 of these encoded frames holds before them, laid out as `defragment`
+ * lays one out: ftyp, a moov listing every frame (one chunk, each frame `1 / fps` long, the key
+ * frames named, and when each is shown if that isn't the order they're decoded in), and the mdat's
+ * header. The frames' bytes follow it, in the order they came: the header and they are the file,
+ * so a long take's frames can stay where they are (in Blobs) while it's put together. Pure.
+ */
+export function mp4Header({ width, height, avcC, fps, frames }: EncodedVideo): Uint8Array<ArrayBuffer> {
+  if (!frames.length || !frames[0].key) throw new Error("a video starts with a key frame");
+  const tick = Math.round(TIMESCALE / fps);
+  const samples = frames.map((frame, k) => ({ size: frame.size, duration: tick, sync: frame.key, cto: (frame.at - k) * tick }));
+  const length = frames.length * tick;
+  const mediaBytes = samples.reduce((total, sample) => total + sample.size, 0);
+  const wide = mediaBytes + 1e6 > 0xffffffff;
+  const matrix = (out: Writer) => [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000].forEach((value) => out.u32(value));
+
+  const ftyp = new Writer();
+  ftyp.box("ftyp", () => {
+    ftyp.type("isom");
+    ftyp.u32(0x200);
+    for (const brand of ["isom", "iso2", "avc1", "mp41"]) ftyp.type(brand);
+  });
+  const ftypBytes = ftyp.done();
+
+  const moovOf = (offset: number) => {
+    const out = new Writer();
+    out.box("moov", () => {
+      out.full("mvhd", 0, 0, () => {
+        out.u32(0);
+        out.u32(0);
+        out.u32(TIMESCALE);
+        out.u32(length);
+        out.u32(0x00010000);
+        out.u16(0x0100);
+        out.u16(0);
+        out.u32(0);
+        out.u32(0);
+        matrix(out);
+        for (let k = 0; k < 6; k++) out.u32(0);
+        out.u32(2);
+      });
+      out.box("trak", () => {
+        // Enabled and in the movie.
+        out.full("tkhd", 0, 3, () => {
+          out.u32(0);
+          out.u32(0);
+          out.u32(1);
+          out.u32(0);
+          out.u32(length);
+          out.u32(0);
+          out.u32(0);
+          out.u16(0);
+          out.u16(0);
+          out.u16(0);
+          out.u16(0);
+          matrix(out);
+          out.u32(width * 0x10000);
+          out.u32(height * 0x10000);
+        });
+        out.box("mdia", () => {
+          out.full("mdhd", 0, 0, () => {
+            out.u32(0);
+            out.u32(0);
+            out.u32(TIMESCALE);
+            out.u32(length);
+            // "und": no language.
+            out.u16(0x55c4);
+            out.u16(0);
+          });
+          out.full("hdlr", 0, 0, () => {
+            out.u32(0);
+            out.type("vide");
+            out.u32(0);
+            out.u32(0);
+            out.u32(0);
+            for (const c of "VideoHandler\0") out.u8(c.charCodeAt(0));
+          });
+          out.box("minf", () => {
+            out.full("vmhd", 0, 1, () => {
+              for (let k = 0; k < 4; k++) out.u16(0);
+            });
+            out.box("dinf", () =>
+              out.full("dref", 0, 0, () => {
+                out.u32(1);
+                // The frames are in this file.
+                out.full("url ", 0, 1, () => {});
+              }),
+            );
+            out.box("stbl", () => {
+              out.full("stsd", 0, 0, () => {
+                out.u32(1);
+                out.box("avc1", () => {
+                  for (let k = 0; k < 6; k++) out.u8(0);
+                  out.u16(1);
+                  out.u16(0);
+                  out.u16(0);
+                  for (let k = 0; k < 3; k++) out.u32(0);
+                  out.u16(width);
+                  out.u16(height);
+                  // 72 dots an inch, across and down.
+                  out.u32(0x00480000);
+                  out.u32(0x00480000);
+                  out.u32(0);
+                  out.u16(1);
+                  // No compressor's name: 32 bytes, the first its length.
+                  for (let k = 0; k < 32; k++) out.u8(0);
+                  out.u16(0x0018);
+                  out.u16(0xffff);
+                  out.box("avcC", () => out.raw(avcC));
+                });
+              });
+              sampleTables(out, samples, offset, wide);
+            });
+          });
+        });
+      });
+    });
+    return out.done();
+  };
+
+  // Measured once with a stand-in offset, then written with the real one (the same size).
+  const mdat = mdatHeader(mediaBytes);
+  const moov = moovOf(ftypBytes.length + moovOf(0).length + mdat.length);
+  const output = new Uint8Array(ftypBytes.length + moov.length + mdat.length);
+  output.set(ftypBytes, 0);
+  output.set(moov, ftypBytes.length);
+  output.set(mdat, ftypBytes.length + moov.length);
+  return output;
+}
+
+/** A track as a player finds it: its clock, and every sample (where it is, how big, how long, whether a decode can start there, when it's shown). */
+export type TrackSamples = { id: number; timescale: number; samples: Sample[] };
+
+/** A regular MP4's tracks, read from their sample tables (the moov's stbl: no fragments). */
+function readRegular(bytes: Uint8Array, view: DataView, moov: Box): TrackSamples[] | null {
+  const tracks: TrackSamples[] = [];
+  for (const trak of childrenOf(bytes, view, moov, "trak")) {
+    const tkhd = child(bytes, view, trak, "tkhd");
+    const mdia = child(bytes, view, trak, "mdia");
+    const mdhd = child(bytes, view, mdia, "mdhd");
+    const stbl = child(bytes, view, child(bytes, view, mdia, "minf"), "stbl");
+    if (!tkhd || !mdhd || !stbl) return null;
+    const id = view.getUint32(tkhd.body + (bytes[tkhd.body] === 1 ? 20 : 12));
+    const timescale = view.getUint32(mdhd.body + (bytes[mdhd.body] === 1 ? 20 : 12));
+    const table = (type: string) => child(bytes, view, stbl, type);
+    const stts = table("stts");
+    const stsz = table("stsz");
+    const stsc = table("stsc");
+    const stco = table("stco") ?? table("co64");
+    if (!stts || !stsz || !stsc || !stco) return null;
+    const count = view.getUint32(stsz.body + 8);
+    const fixed = view.getUint32(stsz.body + 4);
+    const sizes = Array.from({ length: count }, (_, k) => (fixed ? fixed : view.getUint32(stsz.body + 12 + 4 * k)));
+    const expand = (box: Box | undefined, signed: boolean) => {
+      const values: number[] = [];
+      if (!box) return values;
+      const negative = signed && bytes[box.body] === 1;
+      for (let k = 0, entries = view.getUint32(box.body + 4); k < entries; k++) {
+        const value = negative ? view.getInt32(box.body + 12 + 8 * k) : view.getUint32(box.body + 12 + 8 * k);
+        for (let n = view.getUint32(box.body + 8 + 8 * k); n > 0; n--) values.push(value);
+      }
+      return values;
+    };
+    const durations = expand(stts, false);
+    const ctos = expand(table("ctts"), true);
+    const stss = table("stss");
+    const syncs = stss ? new Set(Array.from({ length: view.getUint32(stss.body + 4) }, (_, k) => view.getUint32(stss.body + 8 + 4 * k))) : null;
+    const wide = stco.type === "co64";
+    const chunks = Array.from({ length: view.getUint32(stco.body + 4) }, (_, k) => (wide ? Number(view.getBigUint64(stco.body + 8 + 8 * k)) : view.getUint32(stco.body + 8 + 4 * k)));
+    const runsOf = Array.from({ length: view.getUint32(stsc.body + 4) }, (_, k) => ({ first: view.getUint32(stsc.body + 8 + 12 * k), each: view.getUint32(stsc.body + 12 + 12 * k) }));
+    if (durations.length !== count) return null;
+    const samples: Sample[] = [];
+    for (const [c, start] of chunks.entries()) {
+      // How many samples this chunk holds: as the last run that starts at or before it says.
+      const each = runsOf.filter((run) => run.first <= c + 1).at(-1)?.each ?? 0;
+      let at = start;
+      for (let n = 0; n < each && samples.length < count; n++) {
+        const k = samples.length;
+        if (at + sizes[k] > bytes.length) return null;
+        samples.push({ offset: at, size: sizes[k], duration: durations[k], sync: syncs ? syncs.has(k + 1) : true, cto: ctos[k] ?? 0 });
+        at += sizes[k];
+      }
+    }
+    if (samples.length !== count) return null;
+    tracks.push({ id, timescale, samples });
+  }
+  return tracks;
+}
+
+/**
+ * Every track's samples, as a player would find them in an MP4, fragmented (as a recorder writes
+ * one) or regular (as `defragment` and `mp4Of` write one). Null for what this can't read.
+ */
+export function samplesOf(input: Uint8Array): TrackSamples[] | null {
+  try {
+    if (isFragmented(input)) return read(input)?.tracks.map(({ id, timescale, samples }) => ({ id, timescale, samples })) ?? null;
+    const view = new DataView(input.buffer, input.byteOffset, input.byteLength);
+    const moov = boxes(input, view, 0, input.length).find((b) => b.type === "moov");
+    return moov ? readRegular(input, view, moov) : null;
+  } catch {
+    return null;
   }
 }

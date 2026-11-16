@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defragment, isFragmented } from "./mp4.ts";
+import { defragment, isFragmented, mp4Header, samplesOf } from "./mp4.ts";
 
 /** A box: its size and type, then what's in it. */
 const u32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
@@ -200,5 +200,135 @@ describe("defragment", () => {
     expect(defragment(regular)).toBeNull();
     // Cut short: a sample runs past the end.
     expect(defragment(input.subarray(0, input.length - 3))).toBeNull();
+  });
+});
+
+describe("samplesOf", () => {
+  const input = fragmented([
+    [
+      { track: 1, time: 0, samples: VIDEO },
+      { track: 2, time: 0, samples: AUDIO },
+    ],
+  ]);
+
+  it("reads a fragmented MP4 and the regular one defragment makes of it alike: every sample, as long, its bytes the same", () => {
+    const before = samplesOf(input)!;
+    const after = samplesOf(defragment(input)!)!;
+    expect(before.map((track) => [track.id, track.timescale, track.samples.length])).toEqual([
+      [1, 90000, 3],
+      [2, 48000, 2],
+    ]);
+    const plain = (bytes: Uint8Array, tracks: NonNullable<ReturnType<typeof samplesOf>>) =>
+      tracks.map((track) => track.samples.map(({ offset, size, duration, sync, cto }) => ({ bytes: Array.from(bytes.subarray(offset, offset + size)), duration, sync, cto })));
+    expect(plain(defragment(input)!, after)).toEqual(plain(input, before));
+  });
+
+  it("can't read what isn't an MP4", () => {
+    expect(samplesOf(new Uint8Array([0, 0, 0, 9, 1, 2, 3]))).toBeNull();
+    expect(samplesOf(new Uint8Array(0))).toBeNull();
+  });
+});
+
+/** Six frames of 32×16 as Chromium's VideoEncoder made them (H.264, `avc` format), a key frame every three: their avcC, then each frame. */
+const ENCODED = {
+  avcC: "AWQMC//hABBnZAwLrBjRZNwENAQeEQjUAQAEaM48gP34+AA=",
+  frames: [
+    { key: true, at: 0, data: "AAAAGGW4AAQJ///4IooAAgN+OAAIB8cAAQqpPA==" },
+    { key: false, at: 1, data: "AAAAGWHgAH5Anzf//BFFAAEDTxwABCtjgAEMTi8=" },
+    { key: false, at: 2, data: "AAAAXGHgAL5A/+FIoAAgNxQABAbigACA3FAAEBuKAAIDcUAAQG4oAAgNxQABAbigACA3FAAEBuKAAIDcUAAQG4oAAgNxQABAbigACA3FAAEBuOAAIEEcAARB82H/+Hr+" },
+    { key: true, at: 3, data: "AAAAGWW4AAYJ///4IooAAgMeOAAIBkcAAQrZMXg=" },
+    { key: false, at: 4, data: "AAAAGWHgAH5A/zf//BFFAAEF/xwABEGjgAG8T4A=" },
+    { key: false, at: 5, data: "AAAAWWHgAL5AV/hSKAAIGkUAAQNIoAAgaRQABA0igACBpFAAEDSKAAIGkUAAQNIoAAgaRQABA0igACBpFAAEDSKAAIGkUAAQNIoAAgaRQABA0jgACB3HAAEXbE+A" },
+  ],
+};
+const bytesOf = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+const VIDEO_OF = { width: 32, height: 16, avcC: bytesOf(ENCODED.avcC), fps: 60 };
+const FRAMES = ENCODED.frames.map(({ key, at, data }) => ({ key, at, data: bytesOf(data) }));
+
+/** A whole MP4 of encoded frames: the header `mp4Header` writes, then the frames as they came. */
+function mp4Of(frames: { key: boolean; at: number; data: Uint8Array }[]) {
+  const header = mp4Header({ ...VIDEO_OF, frames: frames.map(({ key, at, data }) => ({ key, at, size: data.length })) });
+  const out = new Uint8Array(header.length + frames.reduce((total, frame) => total + frame.data.length, 0));
+  out.set(header);
+  let at = header.length;
+  for (const frame of frames) {
+    out.set(frame.data, at);
+    at += frame.data.length;
+  }
+  return out;
+}
+
+type Probed = { frames: number; duration: number; width: number; height: number };
+
+/** ffprobe, where the machine has it (Node's own child_process, named loosely: the package's types leave Node out). */
+async function ffprobe(): Promise<((bytes: Uint8Array) => Probed) | null> {
+  const childProcess = "node:child_process";
+  type Run = { status: number | null; stdout: string; stderr: string };
+  const { spawnSync } = (await import(childProcess)) as { spawnSync: (command: string, args: string[], options?: { input?: Uint8Array; encoding?: "utf8" }) => Run };
+  if (spawnSync("ffprobe", ["-version"]).status !== 0) return null;
+  return (bytes) => {
+    // Every frame decoded (-count_frames), not only listed: the moov comes before them, so it reads from a pipe.
+    const args = ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames,duration,width,height", "-of", "json", "-i", "pipe:0"];
+    const result = spawnSync("ffprobe", args, { input: bytes, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`ffprobe couldn't read it: ${result.stderr}`);
+    const [stream] = JSON.parse(result.stdout).streams;
+    return { frames: Number(stream.nb_read_frames), duration: Number(stream.duration), width: stream.width, height: stream.height };
+  };
+}
+const probe = await ffprobe();
+
+describe("mp4Header", () => {
+  const output = mp4Of(FRAMES);
+
+  it("lays an encoder's frames out as a regular MP4: ftyp, a moov listing them, then the frames as they came", () => {
+    const { top, find, walk, view } = parse(output);
+    expect(top.map((b) => b.type)).toEqual(["ftyp", "moov", "mdat"]);
+    expect(isFragmented(output)).toBe(false);
+    const [mdat] = find(["mdat"]);
+    expect(mdat.end).toBe(output.length);
+    const [track] = samplesOf(output)!;
+    expect(track.samples[0].offset).toBe(mdat.body);
+    expect(track.samples.map(({ offset, size }) => Array.from(output.subarray(offset, offset + size)))).toEqual(FRAMES.map((frame) => Array.from(frame.data)));
+    // The decoder's configuration as the encoder gave it, in an avc1 entry the frame's size.
+    const [stsd] = find(["moov", "trak", "mdia", "minf", "stbl", "stsd"]);
+    const [avc1] = walk(stsd.body + 8, stsd.end);
+    expect(avc1.type).toBe("avc1");
+    expect([view.getUint16(avc1.body + 24), view.getUint16(avc1.body + 26)]).toEqual([32, 16]);
+    const [avcC] = walk(avc1.body + 78, avc1.end);
+    expect(avcC.type).toBe("avcC");
+    expect(Array.from(output.subarray(avcC.body, avcC.end))).toEqual(Array.from(VIDEO_OF.avcC));
+  });
+
+  it("gives every frame a sixtieth of a second, says how long the video is and where a decode can start", () => {
+    const [track] = samplesOf(output)!;
+    expect(track.timescale).toBe(90000);
+    expect(track.samples.map((sample) => sample.duration)).toEqual(new Array(6).fill(1500));
+    expect(track.samples.map((sample) => sample.sync)).toEqual([true, false, false, true, false, false]);
+    const { find, view } = parse(output);
+    expect(view.getUint32(find(["moov", "mvhd"])[0].body + 16)).toBe(9000);
+    expect(view.getUint32(find(["moov", "trak", "tkhd"])[0].body + 20)).toBe(9000);
+    expect(view.getUint32(find(["moov", "trak", "mdia", "mdhd"])[0].body + 16)).toBe(9000);
+    // Shown in the order they're decoded: no ctts.
+    expect(find(["moov", "trak", "mdia", "minf", "stbl", "ctts"])).toHaveLength(0);
+  });
+
+  it.skipIf(!probe)("is read by ffprobe as by samplesOf: as many frames, each decoded, and as long", () => {
+    const [track] = samplesOf(output)!;
+    const seconds = track.samples.reduce((total, sample) => total + sample.duration, 0) / track.timescale;
+    expect(probe!(output)).toEqual({ frames: track.samples.length, duration: seconds, width: 32, height: 16 });
+    expect(track.samples.length).toBe(FRAMES.length);
+    expect(seconds).toBeCloseTo(FRAMES.length / 60, 9);
+  });
+
+  it("says when each frame is shown, when an encoder hands them over in another order", () => {
+    // As an encoder with B-frames would: 0, then 2, then 1 (shown before 2), and so on.
+    const reordered = [0, 2, 1, 3, 5, 4].map((at, k) => ({ ...FRAMES[k], at }));
+    const [track] = samplesOf(mp4Of(reordered))!;
+    expect(track.samples.map((sample) => sample.cto / 1500)).toEqual([0, 1, -1, 0, 1, -1]);
+  });
+
+  it("refuses frames that don't start with a key frame", () => {
+    expect(() => mp4Header({ ...VIDEO_OF, frames: [] })).toThrow();
+    expect(() => mp4Header({ ...VIDEO_OF, frames: [{ key: false, at: 0, size: 4 }] })).toThrow();
   });
 });

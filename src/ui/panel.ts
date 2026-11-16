@@ -766,7 +766,17 @@ export class Panel {
     const running = this.running;
     this.running = null;
     this.state = "busy";
-    this.showResult(await running.stop());
+    let result: Result;
+    try {
+      result = await running.stop();
+    } catch (error) {
+      // The page is put back either way; what went wrong is said, and the pick is kept for another go.
+      this.state = "picked";
+      this.toast(`Couldn't make the take: ${(error as Error).message}`);
+      this.showControls();
+      return;
+    }
+    this.showResult(result);
   }
 
   private showResult(result: Result) {
