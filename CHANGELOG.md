@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2
+
+- The README opens on a take Closeup made: the set on its page, filmed from a script, the camera closing in on each click and on the typing.
+
 ## 1.1.1
 
 Render keeps every frame, however slowly the machine encodes.
