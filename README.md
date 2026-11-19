@@ -6,7 +6,7 @@ camera that pans down the page as you scroll and can close in on each click, on 
 click sounds. Keep a take trimmed, at another speed, as a video or a GIF. The docs, with a set to
 film, are at [cesarvenzac.com/closeup](https://cesarvenzac.com/closeup).
 
-[![A take Closeup made of a small set: a cloud drawn in characters, petted, a like pressed and the name Nimbus typed, the camera closing in on each click and on the typing, on a pale blue background](https://cesarvenzac.com/media/abcd5546-c295-430d-ae6f-5ea8e170f083.webp)](https://cesarvenzac.com/closeup)
+[![A take Closeup made of a small set: a cloud drawn in characters, petted, a like pressed and the name Nimbus typed, the camera closing in on each click and on the typing, on a pale blue background](https://cesarvenzac.com/media/2e6ad52b-fe61-4b77-86f7-a39e1168463b.webp)](https://cesarvenzac.com/closeup)
 
 That's a take Closeup made of the set on its page, from a script: the drawn cursor pets the cloud,
 likes it and names it, and the camera closes in on each click and on the typing.

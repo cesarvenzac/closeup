@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.3
+
+- The README's loop is sharper: moving shapes no longer leave pixels behind them.
+
 ## 1.1.2
 
 - The README opens on a take Closeup made: the set on its page, filmed from a script, the camera closing in on each click and on the typing.
