@@ -132,7 +132,7 @@ A script is plain JSON:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "start": { "x": 480, "y": 130 },
   "steps": [
     {
@@ -173,6 +173,26 @@ addAction({
 
 The button counts up while it works and stays pressed once it's done. `addAction` returns what
 takes it away again.
+
+## API
+
+```ts
+install({ shortcut? }): () => void; // "Alt+Shift+C" (DEFAULT_SHORTCUT) unless said; returns what removes it
+open({ pick? }): void; // opens it, on an element already picked if given
+close(): void;
+toggle(): void;
+addAction(action: TakeAction): () => void;
+supportsCapture(): boolean; // whether this browser can film (Region Capture: Chromium)
+
+parseScript(value: unknown): Script | null; // a script read from a file, either version, or null
+loadScript(path?): Script | null; // the script kept in this browser for a page (this one unless said)
+saveScript(script: Script | null, path?): void;
+```
+
+A shortcut is written as `Alt+Shift+C` (or `Option`, `Cmd`, `Ctrl`, `⌥`, `⇧`, `⌘`) and matched by
+the key's place on the keyboard; it needs ⌥, ⌘ or Ctrl, or `install` throws. The types `Script`,
+`Step`, `Target`, `Settings`, `Take` and `TakeAction` are exported too. Each, with examples:
+[cesarvenzac.com/closeup/docs/api](https://cesarvenzac.com/closeup/docs/api).
 
 ## How it stays sharp
 

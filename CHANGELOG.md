@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.4
+
+- The README's script example is a version 2 script, as one that scrolls must be: written as version 1, its `scroll` step was read as a plain move.
+- The README has an API section: `install` and its shortcut (which needs ⌥, ⌘ or Ctrl, or it throws) and what it returns, `open`, `close`, `toggle`, `addAction`, `supportsCapture`, `parseScript`, `loadScript` and `saveScript`, and the types exported with them.
+
 ## 1.1.3
 
 - The README's loop is sharper: moving shapes no longer leave pixels behind them.
@@ -20,6 +25,9 @@ Render keeps every frame, however slowly the machine encodes.
   pixels wide or tall loses its last column or row, as H.264 needs.
 - **A take that fails says why.** If a take can't be made, the page is put back and Closeup says
   what went wrong, instead of staying busy.
+- **Videos and sounds keep time.** Render holds videos and sounds playing in the page on the take's
+  clock, a step at a time, as it holds animations; before, they played on in real time and raced
+  through the take.
 
 ## 1.1.0
 
