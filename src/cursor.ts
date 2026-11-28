@@ -15,6 +15,8 @@ export type CursorOptions = {
   onPress?: (down: boolean) => void;
   /** A soft ring that spreads from the tip on each click, so a viewer sees it. */
   ring?: boolean;
+  /** Never drawn: a take without a cursor (`film`'s `cursor: false`). The real cursor stays hidden. */
+  hidden?: boolean;
   /** Events over Closeup's own controls: the real cursor shows there, the drawn one hides. */
   ignore?: (target: EventTarget | null) => boolean;
   /** The page's element at a point, Closeup's own layers left out. */
@@ -51,6 +53,7 @@ export class DrawnCursor {
       filter: "drop-shadow(0 1.5px 2.5px rgb(0 0 0 / 0.3))",
       transition: "scale 90ms ease-out",
     });
+    if (options.hidden) this.element.style.display = "none";
   }
 
   /** Puts it on the page, hiding the real cursor there; it appears at its first `place`. */

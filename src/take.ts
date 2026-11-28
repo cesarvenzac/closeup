@@ -112,7 +112,7 @@ export type Actor = { cursor: DrawnCursor; pointer: SyntheticPointer; hit: (x: n
  * drawn cursor, the pointer the page is told about, and the cursor. `dispose()` takes it all away,
  * telling the page the pointer left so what it hovers lets go.
  */
-export function createActor(layers: Layers, { size, onPress, ring }: { size: number; onPress?: (down: boolean) => void; ring?: boolean }): Actor {
+export function createActor(layers: Layers, { size, onPress, ring, hidden }: { size: number; onPress?: (down: boolean) => void; ring?: boolean; hidden?: boolean }): Actor {
   const shield = document.createElement("div");
   Object.assign(shield.style, { position: "fixed", inset: "0", zIndex: "2147483641", pointerEvents: "auto" });
   layers.host.append(shield);
@@ -123,6 +123,7 @@ export function createActor(layers: Layers, { size, onPress, ring }: { size: num
     size,
     onPress,
     ring,
+    hidden,
     hit,
     // Looked for through the sheet, which would otherwise be all there is at any point.
     caretAt: (x, y) => {
@@ -155,7 +156,8 @@ export const pageHeight = () => Math.max(document.documentElement.scrollHeight, 
 export const cameraFor = (stage: Stage, scroll: Point, height: number) =>
   new Camera({ stage, scroll, pageHeight: height, still: matchMedia("(prefers-reduced-motion: reduce)").matches });
 
-async function setUp(picked: Picked, settings: Settings, layers: Layers, image: ImageBitmap | null, mixer: Mixer | null, script: Script | null) {
+/** `drawn`: whether a script's cursor is drawn (the panel always draws it; `film` may not). */
+async function setUp(picked: Picked, settings: Settings, layers: Layers, image: ImageBitmap | null, mixer: Mixer | null, script: Script | null, drawn = true) {
   const { host, ignore } = layers;
   const undo: Undo[] = [];
   const hit = pageHit(layers);
@@ -186,7 +188,7 @@ async function setUp(picked: Picked, settings: Settings, layers: Layers, image: 
     undo.push(() => box.remove());
     await cropTo(video, box);
     if (script) {
-      actor = createActor(layers, { size: settings.cursorSize, onPress, ring: settings.ring });
+      actor = createActor(layers, { size: settings.cursorSize, onPress, ring: settings.ring, hidden: !drawn });
       undo.push(() => actor?.dispose());
     } else if (settings.cursor) {
       const drawn = new DrawnCursor(host, { size: settings.cursorSize, onPress, ring: settings.ring, ignore, hit });
@@ -336,13 +338,13 @@ function byHand(camera: Camera, layers: Layers, level: number, cursor: DrawnCurs
  * playing it; `before` runs once the stage is set and before recording starts (a countdown);
  * `stop()` ends the take and puts the page back.
  */
-export async function startVideo(picked: Picked, settings: Settings, layers: Layers, image: ImageBitmap | null, script: Script | null = null, before?: Before): Promise<Running> {
-  if (script && settings.render && canRender()) return renderVideo(picked, settings, layers, image, script);
+export async function startVideo(picked: Picked, settings: Settings, layers: Layers, image: ImageBitmap | null, script: Script | null = null, before?: Before, drawn = true): Promise<Running> {
+  if (script && settings.render && canRender()) return renderVideo(picked, settings, layers, image, script, drawn);
   // Made in the click that started the take: audio started later can be refused.
   const mixer = settings.clicks || settings.tabAudio ? new Mixer() : null;
   let setup: Awaited<ReturnType<typeof setUp>>;
   try {
-    setup = await setUp(picked, settings, layers, image, mixer, script);
+    setup = await setUp(picked, settings, layers, image, mixer, script, drawn);
   } catch (error) {
     mixer?.close();
     throw error;
@@ -477,8 +479,8 @@ function recordFrames(canvas: HTMLCanvasElement, bitrate: number) {
  * next is made, so however slowly the machine encodes, none is left out; where the browser can't
  * encode the take, it's recorded instead (`recordFrames`). Silent.
  */
-async function renderVideo(picked: Picked, settings: Settings, layers: Layers, image: ImageBitmap | null, script: Script): Promise<Running> {
-  const { stage, camera, compositor, unwind, actor, box } = await setUp(picked, settings, layers, image, null, script);
+async function renderVideo(picked: Picked, settings: Settings, layers: Layers, image: ImageBitmap | null, script: Script, drawn = true): Promise<Running> {
+  const { stage, camera, compositor, unwind, actor, box } = await setUp(picked, settings, layers, image, null, script, drawn);
   const bitrate = settings.quality === "high" ? 40_000_000 : 12_000_000;
   const encoder = await FrameEncoder.open({ ...compositor.size, fps: RENDER_FPS, bitrate });
   const recording = encoder ? null : recordFrames(compositor.canvas, bitrate);

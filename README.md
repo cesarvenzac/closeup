@@ -174,6 +174,30 @@ addAction({
 The button counts up while it works and stays pressed once it's done. `addAction` returns what
 takes it away again.
 
+## Film from code
+
+`film` films an element without the toolbar and hands the take back: for a page that makes its
+own films, a clip laid out in the page and filmed, or a product's screen played through a script.
+It's a scripted take made a frame at a time (Render, above), silent, with no countdown; nothing of
+Closeup's shows meanwhile but the drawn cursor, and the page is put back once it's done. Chrome
+still asks to share the tab, so call it from a press:
+
+```ts
+import { film } from "@cesarvenzac/closeup";
+
+filmIt.addEventListener("click", async () => {
+  const take = await film(document.querySelector("#clip"), { shape: "9:16", cursor: false, seconds: 8 });
+  // take.blob is a regular MP4, take.width × take.height, take.seconds long
+});
+```
+
+With a `script`, the take lasts as long as the script plays, its moves, clicks and typing reaching
+the page whether the cursor is drawn or not; without one, the element is filmed as it moves on its
+own for `seconds` (5 unless said). `shape` is the take's (16:9 unless said), `padding` the room
+round the element (a share of its size, none unless said), `zoom` how close the camera comes on a
+click (1, 1.5 or 2), and `signal` stops it where it is, what's made so far being the take. It
+throws where the tab isn't shared or the browser can't film (`supportsCapture`).
+
 ## API
 
 ```ts
@@ -182,6 +206,7 @@ open({ pick? }): void; // opens it, on an element already picked if given
 close(): void;
 toggle(): void;
 addAction(action: TakeAction): () => void;
+film(element: Element, options?: FilmOptions): Promise<Take>; // films it without the toolbar (above)
 supportsCapture(): boolean; // whether this browser can film (Region Capture: Chromium)
 
 parseScript(value: unknown): Script | null; // a script read from a file, either version, or null
@@ -191,7 +216,7 @@ saveScript(script: Script | null, path?): void;
 
 A shortcut is written as `Alt+Shift+C` (or `Option`, `Cmd`, `Ctrl`, `⌥`, `⇧`, `⌘`) and matched by
 the key's place on the keyboard; it needs ⌥, ⌘ or Ctrl, or `install` throws. The types `Script`,
-`Step`, `Target`, `Settings`, `Take` and `TakeAction` are exported too. Each, with examples:
+`Step`, `Target`, `Settings`, `Shape`, `Take`, `TakeAction` and `FilmOptions` are exported too. Each, with examples:
 [cesarvenzac.com/closeup/docs/api](https://cesarvenzac.com/closeup/docs/api).
 
 ## How it stays sharp

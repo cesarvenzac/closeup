@@ -1,7 +1,7 @@
 // The package as someone installing it uses it: typechecked against its published types (as
 // NodeNext and as a bundler resolves them) and run, by check/run.sh. Filming needs a browser, so
 // in Node it only loads (as a server render would), reads a script and says it can't film.
-import { addAction, parseScript, supportsCapture, type Script, type Take, type TakeAction } from "@cesarvenzac/closeup";
+import { addAction, film, parseScript, supportsCapture, type FilmOptions, type Script, type Shape, type Take, type TakeAction } from "@cesarvenzac/closeup";
 
 const keep: TakeAction = {
   label: "Keep",
@@ -23,4 +23,8 @@ const script: Script | null = parseScript({
 if (!script || script.steps.length !== 1 || script.steps[0].action !== "click") throw new Error("a script didn't read back");
 if (parseScript({ version: 3, start: { x: 0, y: 0 }, steps: [] }) !== null) throw new Error("an unknown script version was read");
 if (supportsCapture()) throw new Error("Node can't film, yet it says it can");
+const shape: Shape = "9:16";
+const options: FilmOptions = { shape, cursor: false, seconds: 1, padding: 0.1, zoom: 1.5, signal: new AbortController().signal };
+const filming: (element: Element, options?: FilmOptions) => Promise<Take> = film;
+if (typeof filming !== "function" || options.shape !== "9:16") throw new Error("film isn't there");
 console.log("ok", JSON.stringify(script.steps[0].to));

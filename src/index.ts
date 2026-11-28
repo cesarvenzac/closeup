@@ -7,7 +7,8 @@
  *   import { install } from "@cesarvenzac/closeup";
  *   install(); // ⌥⇧C opens and closes it
  *
- * `addAction` puts a button of your own on the finished take, to keep it somewhere.
+ * `addAction` puts a button of your own on the finished take, to keep it somewhere, and `film`
+ * films an element without the toolbar, for a page that makes its films itself.
  */
 
 import { matches, parseShortcut, shortcutLabel, typing } from "./shortcut.ts";
@@ -15,6 +16,8 @@ import { Panel } from "./ui/panel.ts";
 
 export { addAction, type Take, type TakeAction } from "./actions.ts";
 export { supportsCapture } from "./capture.ts";
+export { film, type FilmOptions } from "./film.ts";
+export type { Shape } from "./frame.ts";
 export { parseScript, type Script, type Step, type Target } from "./script.ts";
 export type { Settings } from "./settings.ts";
 export { loadScript, saveScript } from "./store.ts";

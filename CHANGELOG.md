@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+Films from code, without the toolbar.
+
+- **`film(element, options)`** films an element and hands the take back, for a page that makes its own films: a scripted take made a frame at a time, silent, with no countdown, in the shape asked, nothing of Closeup's on the page meanwhile but the drawn cursor. Without a script, the element is filmed as it moves on its own for `seconds`; `signal` stops it where it is. Its options are `FilmOptions`, and `Shape` is exported with them.
+- **A take without a cursor**: `film`'s `cursor: false` draws none, while a script's moves, clicks and typing still reach the page.
+
 ## 1.1.4
 
 - The README's script example is a version 2 script, as one that scrolls must be: written as version 1, its `scroll` step was read as a plain move.
